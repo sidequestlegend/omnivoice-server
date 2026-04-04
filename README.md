@@ -37,13 +37,16 @@ OpenAI-compatible HTTP server for [OmniVoice](https://github.com/k2-fsa/OmniVoic
 ### Installation
 
 ```bash
-# Install from source
+# Install from GitHub (recommended for now)
+pip install git+https://github.com/maemreyo/omnivoice-server.git
+
+# Or clone and install locally
 git clone https://github.com/maemreyo/omnivoice-server.git
 cd omnivoice-server
 pip install -e .
 
-# Or install from PyPI (when published)
-pip install omnivoice-server
+# PyPI package coming soon
+# pip install omnivoice-server
 ```
 
 ### Start the Server
