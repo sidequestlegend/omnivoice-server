@@ -34,6 +34,23 @@ OpenAI-compatible HTTP server for [OmniVoice](https://github.com/k2-fsa/OmniVoic
 
 ## Quick Start
 
+### Prerequisites
+
+**PyTorch must be installed before installing omnivoice-server.** The correct PyTorch variant depends on your hardware:
+
+```bash
+# CPU only (works everywhere, but slow)
+pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+# NVIDIA GPU (CUDA) - recommended for production
+pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# Apple Silicon (MPS) - currently broken, use CPU instead
+# See docs/verification/MPS_ISSUE.md for details
+```
+
+For other CUDA versions or more options, see the [official PyTorch installation guide](https://pytorch.org/get-started/locally/).
+
 ### Installation
 
 ```bash

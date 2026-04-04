@@ -1,0 +1,124 @@
+name: Bug Report
+description: Report a bug or unexpected behavior
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! Please fill out the form below.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear description of what the bug is
+      placeholder: When I try to..., the server...
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: Steps to reproduce the behavior
+      placeholder: |
+        1. Start server with `omnivoice-server --device cpu`
+        2. Send request to `/v1/audio/speech`
+        3. See error...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What you expected to happen
+      placeholder: The server should return a WAV file
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened (include error messages)
+      placeholder: |
+        Error: ...
+        Traceback: ...
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: omnivoice-server Version
+      description: Output of `omnivoice-server --version` or git commit hash
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: python
+    attributes:
+      label: Python Version
+      description: Output of `python --version`
+      placeholder: "3.10.12"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: device
+    attributes:
+      label: Device
+      description: What device are you using for inference?
+      options:
+        - CPU
+        - CUDA (NVIDIA GPU)
+        - MPS (Apple Silicon)
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration
+      description: Relevant configuration (CLI flags, environment variables)
+      placeholder: |
+        --device cpu
+        --num-step 32
+        OMNIVOICE_API_KEY=...
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Server Logs
+      description: Relevant server logs (if applicable)
+      placeholder: Paste logs here
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Any other context about the problem
+      placeholder: This started happening after...
+    validations:
+      required: false
