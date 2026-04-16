@@ -9,16 +9,20 @@ from __future__ import annotations
 # after validate_audio_bytes. Moved all imports to top — single import block.
 import io
 
+import numpy as np
 import torch
 import torchaudio
 
 SAMPLE_RATE = 24_000
 
 
-def tensor_to_wav_bytes(tensor: torch.Tensor) -> bytes:
+def tensor_to_wav_bytes(tensor: torch.Tensor | np.ndarray) -> bytes:
     """
-    Convert (1, T) float32 tensor to 16-bit PCM WAV bytes.
+    Convert (1, T) float32 tensor or numpy array to 16-bit PCM WAV bytes.
     """
+    # Handle both torch.Tensor and numpy.ndarray (e.g., when running on CUDA)
+    if isinstance(tensor, np.ndarray):
+        tensor = torch.from_numpy(tensor)
     cpu_tensor = tensor.cpu()
     if cpu_tensor.dim() == 1:
         cpu_tensor = cpu_tensor.unsqueeze(0)
@@ -36,21 +40,30 @@ def tensor_to_wav_bytes(tensor: torch.Tensor) -> bytes:
     return buf.read()
 
 
-def tensors_to_wav_bytes(tensors: list[torch.Tensor]) -> bytes:
+def tensors_to_wav_bytes(tensors: list[torch.Tensor | np.ndarray]) -> bytes:
     """
     Concatenate multiple (1, T) tensors into a single WAV.
     """
     if len(tensors) == 1:
         return tensor_to_wav_bytes(tensors[0])
-    combined = torch.cat([t.cpu() for t in tensors], dim=-1)
+    # Convert numpy arrays to tensors if needed, then concatenate
+    tensor_list = []
+    for t in tensors:
+        if isinstance(t, np.ndarray):
+            t = torch.from_numpy(t)
+        tensor_list.append(t.cpu())
+    combined = torch.cat(tensor_list, dim=-1)
     return tensor_to_wav_bytes(combined)
 
 
-def tensor_to_pcm16_bytes(tensor: torch.Tensor) -> bytes:
+def tensor_to_pcm16_bytes(tensor: torch.Tensor | np.ndarray) -> bytes:
     """
-    Convert (1, T) float32 tensor to raw PCM int16 bytes.
+    Convert (1, T) float32 tensor or numpy array to raw PCM int16 bytes.
     Used for streaming — no WAV header, continuous byte stream.
     """
+    # Handle both torch.Tensor and numpy.ndarray (e.g., when running on CUDA)
+    if isinstance(tensor, np.ndarray):
+        tensor = torch.from_numpy(tensor)
     flat = tensor.squeeze(0).cpu()  # (T,)
     return (flat * 32767).clamp(-32768, 32767).to(torch.int16).numpy().tobytes()
 
