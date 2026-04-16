@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-04-16
+
+### Fixed
+
+- Fixed CUDA device loading error: `TypeError in isnan()` when `model.generate()` returns numpy arrays instead of torch tensors ([#13](https://github.com/maemreyo/omnivoice-server/issues/13))
+- Improved `_has_nan()` method in `ModelService` to handle both `torch.Tensor` and `np.ndarray` types, as well as nested lists/tuples
+
 ## [0.1.0] - 2026-04-04
 
 ### Added
@@ -49,5 +56,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Type hints throughout codebase
 - Async/await for I/O operations
 
-[unreleased]: https://github.com/maemreyo/omnivoice-server/compare/v0.1.0...HEAD
+[unreleased]: https://github.com/maemreyo/omnivoice-server/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/maemreyo/omnivoice-server/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/maemreyo/omnivoice-server/releases/tag/v0.1.0
