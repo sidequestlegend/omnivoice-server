@@ -9,6 +9,7 @@ import asyncio
 import gc
 import logging
 import time
+import types
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
 
@@ -89,6 +90,7 @@ class ModelService:
 
     @staticmethod
     def _has_nan(tensors: list) -> bool:
+        np: types.ModuleType | None
         try:
             import numpy as np
         except Exception:
