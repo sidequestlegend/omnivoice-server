@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from ..services.inference import InferenceService, SynthesisRequest
 from ..services.metrics import MetricsService
-from ..services.profiles import ProfileService
+from ..services.profiles import ProfileNotFoundError, ProfileService
 from ..utils.audio import (
     ResponseFormat,
     tensor_to_pcm16_bytes,
@@ -92,9 +92,20 @@ def _resolve_synthesis_mode(
     profile_svc: ProfileService,
 ) -> tuple[str, str | None, str | None, str | None]:
     """Resolve synthesis mode for /v1/audio/speech."""
-    del profile_svc
-    speaker = body.speaker.strip().lower() if body.speaker else None
-    voice = body.voice.strip().lower() if body.voice else None
+    speaker_raw = body.speaker.strip() if body.speaker else None
+    voice_raw = body.voice.strip() if body.voice else None
+
+    profile_to_check = speaker_raw or voice_raw
+    if profile_to_check:
+        profile_id = profile_to_check
+        if profile_id.lower().startswith("clone:"):
+            profile_id = profile_id.split(":", 1)[1]
+        try:
+            ref_audio_path = profile_svc.get_ref_audio_path(profile_id)
+            ref_text = profile_svc.get_ref_text(profile_id)
+            return "clone", None, str(ref_audio_path), ref_text
+        except ProfileNotFoundError:
+            pass
 
     if body.instructions is not None:
         try:
@@ -106,11 +117,14 @@ def _resolve_synthesis_mode(
                 detail=str(e),
             )
 
-    if speaker and speaker in OPENAI_VOICE_PRESETS:
-        return "design", OPENAI_VOICE_PRESETS[speaker], None, None
+    speaker_key = speaker_raw.strip().lower() if speaker_raw else None
+    voice_key = voice_raw.strip().lower() if voice_raw else None
 
-    if voice and voice in OPENAI_VOICE_PRESETS:
-        return "design", OPENAI_VOICE_PRESETS[voice], None, None
+    if speaker_key and speaker_key in OPENAI_VOICE_PRESETS:
+        return "design", OPENAI_VOICE_PRESETS[speaker_key], None, None
+
+    if voice_key and voice_key in OPENAI_VOICE_PRESETS:
+        return "design", OPENAI_VOICE_PRESETS[voice_key], None, None
 
     return "design", DEFAULT_DESIGN_INSTRUCTIONS, None, None
 

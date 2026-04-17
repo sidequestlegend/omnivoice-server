@@ -4,6 +4,7 @@ Tests for speech synthesis endpoints.
 
 from __future__ import annotations
 
+import io
 import shutil
 
 import pytest
@@ -38,6 +39,31 @@ def test_speech_design_voice(client):
     req = client.app.state.inference_svc.synthesize.await_args.args[0]
     assert req.mode == "design"
     assert req.instruct == "male, middle-aged, moderate pitch, british accent"
+
+
+def test_speech_clone_profile_id_in_voice_selects_saved_profile(client, sample_audio_bytes):
+    resp = client.post(
+        "/v1/voices/profiles",
+        data={"profile_id": "voice1"},
+        files={"ref_audio": ("ref.wav", io.BytesIO(sample_audio_bytes), "audio/wav")},
+    )
+    assert resp.status_code == 201
+
+    resp = client.post(
+        "/v1/audio/speech",
+        json={
+            "input": "Hello",
+            "voice": "clone:voice1",
+            "response_format": "pcm",
+        },
+    )
+    assert resp.status_code == 200
+    req = client.app.state.inference_svc.synthesize.await_args.args[0]
+    assert req.mode == "clone"
+    assert req.ref_audio_path is not None
+    assert req.ref_audio_path.endswith("/voice1/ref_audio.wav") or req.ref_audio_path.endswith(
+        "\\voice1\\ref_audio.wav"
+    )
 
 
 def test_speech_auto_uses_default_design_prompt(client):
