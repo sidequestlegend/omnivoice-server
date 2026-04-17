@@ -6,8 +6,6 @@ from __future__ import annotations
 
 import base64
 
-import pytest
-
 
 def test_script_single_track_returns_wav(client):
     """Happy path: single_track output returns WAV audio."""
@@ -451,3 +449,177 @@ def test_script_skipped_segments_header_empty_on_success(client):
     )
     assert resp.status_code == 200
     assert resp.headers["X-Skipped-Segments"] == ""
+
+
+def test_script_whitespace_only_text_returns_422(client):
+    """Whitespace-only text returns 422."""
+    resp = client.post(
+        "/v1/audio/script",
+        json={
+            "script": [
+                {"speaker": "alice", "text": "   "},
+            ],
+        },
+    )
+    assert resp.status_code == 422
+
+
+def test_script_whitespace_only_voice_returns_422(client):
+    """Whitespace-only voice returns 422."""
+    resp = client.post(
+        "/v1/audio/script",
+        json={
+            "script": [
+                {"speaker": "alice", "text": "Hello", "voice": "   "},
+            ],
+        },
+    )
+    assert resp.status_code == 422
+
+
+def test_script_on_error_skip_all_fail_returns_422(client):
+    """When on_error='skip' and all segments fail, returns 422."""
+    from unittest.mock import AsyncMock
+
+    from fastapi import HTTPException
+
+    async def _failing_synthesize(req):
+        raise HTTPException(status_code=400, detail="Synthesis failed")
+
+    original_synthesize = client.app.state.inference_svc.synthesize
+    client.app.state.inference_svc.synthesize = AsyncMock(side_effect=_failing_synthesize)
+
+    try:
+        resp = client.post(
+            "/v1/audio/script",
+            json={
+                "script": [
+                    {"speaker": "alice", "text": "Hello"},
+                    {"speaker": "bob", "text": "Hi"},
+                ],
+                "on_error": "skip",
+            },
+        )
+        assert resp.status_code == 422
+    finally:
+        client.app.state.inference_svc.synthesize = original_synthesize
+
+
+def test_script_capacity_returns_503_when_slot_occupied(client):
+    """Script synthesis returns 503 when dedicated slot is already occupied."""
+    import asyncio
+    import time
+    from unittest.mock import AsyncMock
+
+    async def _slow_synthesize(req):
+        await asyncio.sleep(0.5)
+        return AsyncMock(tensors=[AsyncMock()], duration_s=1.0)
+
+    original_synthesize = client.app.state.inference_svc.synthesize
+    client.app.state.inference_svc.synthesize = AsyncMock(side_effect=_slow_synthesize)
+
+    try:
+        import threading
+
+        results = []
+
+        def _make_request():
+            resp = client.post(
+                "/v1/audio/script",
+                json={"script": [{"speaker": "alice", "text": "Hello world"}]},
+            )
+            results.append(resp.status_code)
+
+        thread1 = threading.Thread(target=_make_request)
+        thread2 = threading.Thread(target=_make_request)
+
+        thread1.start()
+        time.sleep(0.05)
+        thread2.start()
+
+        thread1.join()
+        thread2.join()
+
+        assert 503 in results, "Expected at least one 503 when capacity exceeded"
+    finally:
+        client.app.state.inference_svc.synthesize = original_synthesize
+
+
+def test_script_timeout_returns_504(client):
+    """Script synthesis returns 504 when exceeding total timeout."""
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+
+    async def _timeout_synthesize(req):
+        await asyncio.sleep(999)
+        return AsyncMock(tensors=[AsyncMock()], duration_s=1.0)
+
+    original_synthesize = client.app.state.inference_svc.synthesize
+    client.app.state.inference_svc.synthesize = AsyncMock(side_effect=_timeout_synthesize)
+
+    try:
+        with patch("omnivoice_server.services.script.SCRIPT_TOTAL_TIMEOUT_S", 0.1):
+            resp = client.post(
+                "/v1/audio/script",
+                json={"script": [{"speaker": "alice", "text": "Hello"}]},
+            )
+            assert resp.status_code == 504
+    finally:
+        client.app.state.inference_svc.synthesize = original_synthesize
+
+
+def test_script_single_vs_multi_track_consistency(client):
+    """Verify single_track and multi_track return consistent metadata."""
+    script = [
+        {"speaker": "alice", "text": "Hello world"},
+        {"speaker": "bob", "text": "Hi there"},
+        {"speaker": "alice", "text": "How are you?"},
+    ]
+
+    resp_single = client.post(
+        "/v1/audio/script",
+        json={"script": script, "pause_between_speakers": 0.5},
+    )
+    assert resp_single.status_code == 200
+
+    resp_multi = client.post(
+        "/v1/audio/script",
+        json={"script": script, "output_format": "multi_track", "pause_between_speakers": 0.5},
+    )
+    assert resp_multi.status_code == 200
+
+    single_duration = float(resp_single.headers["X-Audio-Duration-S"])
+    single_speakers = int(resp_single.headers["X-Speakers-Unique"])
+    single_segments = int(resp_single.headers["X-Segment-Count"])
+
+    multi_body = resp_multi.json()
+    multi_duration = multi_body["metadata"]["total_duration_s"]
+    multi_speakers = multi_body["metadata"]["speakers_unique"]
+    multi_segments = multi_body["metadata"]["segment_count"]
+
+    assert single_speakers == multi_speakers == 2
+    assert single_segments == multi_segments == 3
+    assert abs(single_duration - multi_duration) < 0.1
+
+
+def test_script_malformed_tensor_handling(client):
+    """Verify malformed tensor handling via script response path."""
+    from unittest.mock import AsyncMock
+
+    import pytest
+    import torch
+
+    async def _malformed_synthesize(req):
+        return AsyncMock(tensors=[torch.tensor([float("nan")])], duration_s=1.0)
+
+    original_synthesize = client.app.state.inference_svc.synthesize
+    client.app.state.inference_svc.synthesize = AsyncMock(side_effect=_malformed_synthesize)
+
+    try:
+        with pytest.raises(ValueError, match="NaN or Inf"):
+            client.post(
+                "/v1/audio/script",
+                json={"script": [{"speaker": "alice", "text": "Hello"}]},
+            )
+    finally:
+        client.app.state.inference_svc.synthesize = original_synthesize

@@ -46,6 +46,20 @@ class ScriptSegment(BaseModel):
             )
         return v
 
+    @field_validator("text")
+    @classmethod
+    def validate_text(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("Text cannot be whitespace-only")
+        return v
+
+    @field_validator("voice")
+    @classmethod
+    def validate_voice(cls, v: str | None) -> str | None:
+        if v is not None and not v.strip():
+            raise ValueError("Voice cannot be whitespace-only")
+        return v
+
 
 class ScriptRequest(BaseModel):
     """Request body for /v1/audio/script endpoint."""
@@ -119,10 +133,11 @@ async def create_script_audio(
     # Extract audio segments (filter out pause markers)
     audio_segments = [seg for seg in result.synthesized_segments if seg.get("type") == "audio"]
 
-    # Build segments with tensors
-    segments_with_tensors = [
-        {"speaker": seg["speaker"], "audio": seg["audio"]} for seg in audio_segments
-    ]
+    segments_with_tensors = []
+    for seg in audio_segments:
+        if "speaker" not in seg or "audio" not in seg:
+            raise RuntimeError(f"Malformed audio segment from orchestrator: {seg.keys()}")
+        segments_with_tensors.append({"speaker": seg["speaker"], "audio": seg["audio"]})
 
     # Compute unique speakers and segment count
     unique_speakers = len(set(seg["speaker"] for seg in segments_with_tensors))

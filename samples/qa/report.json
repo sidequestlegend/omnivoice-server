@@ -1,8 +1,8 @@
 {
   "generated_at": "2026-04-17T06:24:04Z",
   "base_url": "http://127.0.0.1:8880",
-  "total": 29,
-  "passed": 29,
+  "total": 37,
+  "passed": 37,
   "failed": 0,
   "errors": 0,
   "results": [
@@ -341,6 +341,102 @@
       "actual_status": 200,
       "latency_s": 15.68,
       "saved_path": "samples/qa/D03_chinese_pinyin.wav"
+    },
+    {
+      "id": "E01",
+      "label": "script_two_speakers_basic",
+      "group": "script_api",
+      "desc": "Two-speaker basic dialogue mixed into a single WAV track",
+      "endpoint": "/v1/audio/script",
+      "status": "PASS",
+      "expect_status": 200,
+      "actual_status": 200,
+      "latency_s": 41.89,
+      "saved_path": "samples/qa/E01_script_two_speakers_basic.wav"
+    },
+    {
+      "id": "E02",
+      "label": "script_same_speaker_no_pause",
+      "group": "script_api",
+      "desc": "Multiple segments from the same speaker without inserted speaker-change pauses",
+      "endpoint": "/v1/audio/script",
+      "status": "PASS",
+      "expect_status": 200,
+      "actual_status": 200,
+      "latency_s": 55.29,
+      "saved_path": "samples/qa/E02_script_same_speaker_no_pause.wav"
+    },
+    {
+      "id": "E03",
+      "label": "script_alternating_with_pause",
+      "group": "script_api",
+      "desc": "Alternating speakers with pauses inserted only when the speaker changes",
+      "endpoint": "/v1/audio/script",
+      "status": "PASS",
+      "expect_status": 200,
+      "actual_status": 200,
+      "latency_s": 57.41,
+      "saved_path": "samples/qa/E03_script_alternating_with_pause.wav"
+    },
+    {
+      "id": "E04",
+      "label": "script_default_voice",
+      "group": "script_api",
+      "desc": "Request-level default voice inherited by multiple speakers",
+      "endpoint": "/v1/audio/script",
+      "status": "PASS",
+      "expect_status": 200,
+      "actual_status": 200,
+      "latency_s": 29.31,
+      "saved_path": "samples/qa/E04_script_default_voice.wav"
+    },
+    {
+      "id": "E05",
+      "label": "script_multi_speaker_story",
+      "group": "script_api",
+      "desc": "Three-speaker story mixed into a single WAV track",
+      "endpoint": "/v1/audio/script",
+      "status": "PASS",
+      "expect_status": 200,
+      "actual_status": 200,
+      "latency_s": 73.14,
+      "saved_path": "samples/qa/E05_script_multi_speaker_story.wav"
+    },
+    {
+      "id": "E06",
+      "label": "script_openai_presets",
+      "group": "script_api",
+      "desc": "Two-speaker script using OpenAI preset aliases mapped through the script API",
+      "endpoint": "/v1/audio/script",
+      "status": "PASS",
+      "expect_status": 200,
+      "actual_status": 200,
+      "latency_s": 31.13,
+      "saved_path": "samples/qa/E06_script_openai_presets.wav"
+    },
+    {
+      "id": "E07",
+      "label": "script_segment_speed_override",
+      "group": "script_api",
+      "desc": "Segment-level speed override inside one multi-speaker request",
+      "endpoint": "/v1/audio/script",
+      "status": "PASS",
+      "expect_status": 200,
+      "actual_status": 200,
+      "latency_s": 56.34,
+      "saved_path": "samples/qa/E07_script_segment_speed_override.wav"
+    },
+    {
+      "id": "E08",
+      "label": "script_default_voice_three_speakers",
+      "group": "script_api",
+      "desc": "Three speakers all inheriting the same request-level default voice",
+      "endpoint": "/v1/audio/script",
+      "status": "PASS",
+      "expect_status": 200,
+      "actual_status": 200,
+      "latency_s": 53.64,
+      "saved_path": "samples/qa/E08_script_default_voice_three_speakers.wav"
     },
     {
       "id": "F01",

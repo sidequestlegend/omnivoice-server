@@ -135,7 +135,8 @@ class ScriptOrchestrator:
         self._profiles = profile_service
         self._settings = settings
         self._metrics = ScriptMetrics(metrics_service)
-        self._semaphore = asyncio.Semaphore(1)
+        self._slot_lock = threading.Lock()
+        self._slot_occupied = False
 
     @property
     def script_metrics(self) -> ScriptMetrics:
@@ -312,13 +313,19 @@ class ScriptOrchestrator:
 
                 self._metrics.increment_segments_synthesized()
 
+            except HTTPException:
+                if on_error == "abort":
+                    raise
+                else:
+                    result.skipped_indices.append(segment.index)
+                    self._metrics.increment_segments_skipped()
             except Exception as e:
                 if on_error == "abort":
                     raise HTTPException(
                         status_code=500,
                         detail=f"Segment {segment.index} synthesis failed: {str(e)}",
                     )
-                else:  # skip
+                else:
                     result.skipped_indices.append(segment.index)
                     self._metrics.increment_segments_skipped()
 
@@ -345,82 +352,96 @@ class ScriptOrchestrator:
         start_time = time.time()
         self._metrics.increment_requests_total()
 
-        try:
-            # Check semaphore capacity
-            if self._semaphore.locked():
+        with self._slot_lock:
+            if self._slot_occupied:
                 raise HTTPException(
                     status_code=503, detail="Script synthesis at capacity — try again later"
                 )
+            self._slot_occupied = True
 
-            async with self._semaphore:
-                # Convert segments to ScriptSegmentInput
-                segments = [
-                    ScriptSegmentInput(
-                        index=i,
-                        speaker=seg.speaker,
-                        text=seg.text,
-                        voice=seg.voice,
-                        speed=seg.speed,
-                    )
-                    for i, seg in enumerate(req.segments)
-                ]
-
-                # Resolve voices upfront
-                resolve_start = time.time()
-                speaker_voices = await self._resolve_voices(
-                    segments=segments,
-                    default_voice=req.default_voice,
+        try:
+            # Convert segments to ScriptSegmentInput
+            segments = [
+                ScriptSegmentInput(
+                    index=i,
+                    speaker=seg.speaker,
+                    text=seg.text,
+                    voice=seg.voice,
+                    speed=seg.speed,
                 )
-                resolve_time = time.time() - resolve_start
+                for i, seg in enumerate(req.segments)
+            ]
 
-                # Estimate total duration for memory budget check
-                total_chars = sum(len(seg.text) for seg in segments)
-                estimated_duration_s = total_chars * 0.05  # ~50ms per char
+            # Resolve voices upfront
+            resolve_start = time.time()
+            speaker_voices = await self._resolve_voices(
+                segments=segments,
+                default_voice=req.default_voice,
+            )
+            resolve_time = time.time() - resolve_start
 
-                if estimated_duration_s > MAX_TOTAL_AUDIO_DURATION_S:
-                    raise HTTPException(
-                        status_code=422,
-                        detail=(
-                            f"Estimated duration {estimated_duration_s:.1f}s "
-                            f"exceeds limit {MAX_TOTAL_AUDIO_DURATION_S}s"
-                        ),
-                    )
+            # Estimate total duration for memory budget check
+            # Account for effective speed per segment: base_speed and per-segment overrides
+            # Baseline: ~0.08s per char at speed=1.0 (more realistic than 0.05)
+            # Adjust by effective speed: faster speed = shorter duration
+            total_duration_estimate = 0.0
+            for seg in segments:
+                effective_speed = seg.speed if seg.speed is not None else req.speed
+                char_count = len(seg.text)
+                # Duration = (chars * base_rate) / speed
+                segment_duration = (char_count * 0.08) / effective_speed
+                total_duration_estimate += segment_duration
 
-                # Synthesize segments with total timeout (Python 3.9+ compatible)
-                synthesis_start = time.time()
-                try:
-                    result = await asyncio.wait_for(
-                        self._synthesize_segments(
-                            segments=[(seg.speaker, seg) for seg in segments],
-                            speaker_voices=speaker_voices,
-                            base_speed=req.speed,
-                            on_error=req.on_error,
-                            insert_pause_ms=req.insert_pause_ms,
-                        ),
-                        timeout=SCRIPT_TOTAL_TIMEOUT_S,
-                    )
-                except asyncio.TimeoutError:
-                    raise  # Re-raise to be caught by outer handler
-                synthesis_time = time.time() - synthesis_start
+            # Add pause contributions: (num_segments - 1) * pause_duration
+            if len(segments) > 1:
+                pause_duration_s = req.insert_pause_ms / 1000.0
+                # Worst case: every segment has a different speaker
+                total_duration_estimate += (len(segments) - 1) * pause_duration_s
 
-                # Check if all segments failed
-                audio_segments = [s for s in result.synthesized_segments if s["type"] == "audio"]
-                if not audio_segments:
-                    raise HTTPException(status_code=422, detail="All segments failed synthesis")
+            if total_duration_estimate > MAX_TOTAL_AUDIO_DURATION_S:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Estimated duration {total_duration_estimate:.1f}s "
+                        f"exceeds limit {MAX_TOTAL_AUDIO_DURATION_S}s"
+                    ),
+                )
 
-                # Record timestamps
-                result.timestamps = {
-                    "voice_resolution_s": resolve_time,
-                    "synthesis_s": synthesis_time,
-                }
+            # Synthesize segments with total timeout (Python 3.9+ compatible)
+            synthesis_start = time.time()
+            try:
+                result = await asyncio.wait_for(
+                    self._synthesize_segments(
+                        segments=[(seg.speaker, seg) for seg in segments],
+                        speaker_voices=speaker_voices,
+                        base_speed=req.speed,
+                        on_error=req.on_error,
+                        insert_pause_ms=req.insert_pause_ms,
+                    ),
+                    timeout=SCRIPT_TOTAL_TIMEOUT_S,
+                )
+            except asyncio.TimeoutError:
+                raise
+            synthesis_time = time.time() - synthesis_start
 
-                # Record total latency
-                total_latency = time.time() - start_time
-                result.total_latency_s = total_latency
-                self._metrics.record_latency(total_latency * 1000)
-                self._metrics.increment_requests_success()
+            # Check if all segments failed
+            audio_segments = [s for s in result.synthesized_segments if s["type"] == "audio"]
+            if not audio_segments:
+                raise HTTPException(status_code=422, detail="All segments failed synthesis")
 
-                return result
+            # Record timestamps
+            result.timestamps = {
+                "voice_resolution_s": resolve_time,
+                "synthesis_s": synthesis_time,
+            }
+
+            # Record total latency
+            total_latency = time.time() - start_time
+            result.total_latency_s = total_latency
+            self._metrics.record_latency(total_latency * 1000)
+            self._metrics.increment_requests_success()
+
+            return result
 
         except asyncio.TimeoutError:
             self._metrics.increment_requests_timeout()
@@ -434,3 +455,6 @@ class ScriptOrchestrator:
         except Exception as e:
             self._metrics.increment_requests_error()
             raise HTTPException(status_code=500, detail=f"Script synthesis failed: {str(e)}")
+        finally:
+            with self._slot_lock:
+                self._slot_occupied = False
