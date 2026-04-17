@@ -37,7 +37,6 @@ jobs:
           images: maemreyo/omnivoice-server
           tags: |
             type=ref,event=tag
-            type=ref,event=prerelease
             type=sha,prefix=
             latest
 
