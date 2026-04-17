@@ -18,7 +18,7 @@ import torch
 from fastapi import HTTPException
 
 from omnivoice_server.config import Settings
-from omnivoice_server.services.inference import InferenceService
+from omnivoice_server.services.inference import InferenceService, SynthesisRequest
 from omnivoice_server.services.metrics import MetricsService
 from omnivoice_server.services.profiles import ProfileNotFoundError, ProfileService
 from omnivoice_server.voice_presets import OPENAI_VOICE_PRESETS
@@ -202,60 +202,52 @@ class ScriptOrchestrator:
 
         return speaker_voices
 
-    def _build_synthesis_request(
+    async def _build_synthesis_request(
         self,
         text: str,
         voice: str,
         speed: float | None,
         base_speed: float,
-    ) -> Any:
-        """Build synthesis request object (duck-typed to avoid circular import)."""
+    ) -> SynthesisRequest:
+        """Build synthesis request using real SynthesisRequest dataclass."""
         # Use segment speed if provided, otherwise use base speed
         effective_speed = speed if speed is not None else base_speed
 
-        # Parse voice type
+        # Parse voice type and construct appropriate SynthesisRequest
         if voice.startswith("clone:"):
             profile_id = voice.split(":", 1)[1]
-            return type(
-                "SynthesisRequest",
-                (),
-                {
-                    "text": text,
-                    "voice_type": "clone",
-                    "clone_profile_id": profile_id,
-                    "speed": effective_speed,
-                    "openai_voice": None,
-                    "design_voice_attrs": None,
-                },
-            )()
+            # Resolve ref_audio_path from profile service
+            ref_audio_path = await self._profiles.get_ref_audio_path(profile_id)
+            return SynthesisRequest(
+                text=text,
+                mode="clone",
+                ref_audio_path=ref_audio_path,
+                ref_text=None,  # Optional, not provided in script context
+                speed=effective_speed,
+                num_step=None,  # Use server default
+            )
         elif voice.startswith("openai:"):
             preset_name = voice.split(":", 1)[1]
-            return type(
-                "SynthesisRequest",
-                (),
-                {
-                    "text": text,
-                    "voice_type": "openai",
-                    "openai_voice": preset_name,
-                    "speed": effective_speed,
-                    "clone_profile_id": None,
-                    "design_voice_attrs": None,
-                },
-            )()
+            # Map OpenAI preset to design voice instruction
+            instruct = OPENAI_VOICE_PRESETS.get(preset_name)
+            if not instruct:
+                raise ValueError(f"Invalid OpenAI preset: {preset_name}")
+            return SynthesisRequest(
+                text=text,
+                mode="design",
+                instruct=instruct,
+                speed=effective_speed,
+                num_step=None,  # Use server default
+            )
         else:
-            # Design voice (lazy validation)
-            return type(
-                "SynthesisRequest",
-                (),
-                {
-                    "text": text,
-                    "voice_type": "design",
-                    "design_voice_attrs": {"voice_id": voice},
-                    "speed": effective_speed,
-                    "clone_profile_id": None,
-                    "openai_voice": None,
-                },
-            )()
+            # Design voice - voice string is the instruction
+            return SynthesisRequest(
+                text=text,
+                mode="design",
+                instruct=voice,
+                speed=effective_speed,
+                num_step=None,  # Use server default
+            )
 
     async def _synthesize_segments(
         self,
@@ -296,7 +288,7 @@ class ScriptOrchestrator:
             prev_speaker = speaker
 
             # Build synthesis request
-            req = self._build_synthesis_request(
+            req = await self._build_synthesis_request(
                 text=segment.text,
                 voice=voice,
                 speed=segment.speed,
