@@ -5,12 +5,14 @@ Handles multi-segment script synthesis with voice resolution, speaker inheritanc
 pause insertion, and error handling strategies.
 """
 
+from __future__ import annotations
+
 import asyncio
 import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 import torch
 from fastapi import HTTPException
@@ -37,8 +39,8 @@ class ScriptSegmentInput:
     index: int
     speaker: str
     text: str
-    voice: Optional[str] = None
-    speed: Optional[float] = None
+    voice: str | None = None
+    speed: float | None = None
 
 
 @dataclass
@@ -143,7 +145,7 @@ class ScriptOrchestrator:
     async def _resolve_voices(
         self,
         segments: list,
-        default_voice: Optional[str],
+        default_voice: str | None,
     ) -> dict:
         """
         Resolve speaker→voice mapping using first-definition inheritance rule.
@@ -204,7 +206,7 @@ class ScriptOrchestrator:
         self,
         text: str,
         voice: str,
-        speed: Optional[float],
+        speed: float | None,
         base_speed: float,
     ) -> Any:
         """Build synthesis request object (duck-typed to avoid circular import)."""
@@ -277,7 +279,7 @@ class ScriptOrchestrator:
             ScriptResult with synthesized segments and metadata
         """
         result = ScriptResult()
-        prev_speaker: Optional[str] = None
+        prev_speaker: str | None = None
 
         for i, (speaker, segment) in enumerate(segments):
             voice = speaker_voices[speaker]
@@ -359,69 +361,74 @@ class ScriptOrchestrator:
                 )
 
             async with self._semaphore:
-                # Apply total timeout
-                async with asyncio.timeout(SCRIPT_TOTAL_TIMEOUT_S):
-                    # Convert segments to ScriptSegmentInput
-                    segments = [
-                        ScriptSegmentInput(
-                            index=i,
-                            speaker=seg.speaker,
-                            text=seg.text,
-                            voice=seg.voice,
-                            speed=seg.speed,
-                        )
-                        for i, seg in enumerate(req.segments)
-                    ]
-
-                    # Resolve voices upfront
-                    resolve_start = time.time()
-                    speaker_voices = await self._resolve_voices(
-                        segments=segments,
-                        default_voice=req.default_voice,
+                # Convert segments to ScriptSegmentInput
+                segments = [
+                    ScriptSegmentInput(
+                        index=i,
+                        speaker=seg.speaker,
+                        text=seg.text,
+                        voice=seg.voice,
+                        speed=seg.speed,
                     )
-                    resolve_time = time.time() - resolve_start
+                    for i, seg in enumerate(req.segments)
+                ]
 
-                    # Estimate total duration for memory budget check
-                    total_chars = sum(len(seg.text) for seg in segments)
-                    estimated_duration_s = total_chars * 0.05  # ~50ms per char
+                # Resolve voices upfront
+                resolve_start = time.time()
+                speaker_voices = await self._resolve_voices(
+                    segments=segments,
+                    default_voice=req.default_voice,
+                )
+                resolve_time = time.time() - resolve_start
 
-                    if estimated_duration_s > MAX_TOTAL_AUDIO_DURATION_S:
-                        raise HTTPException(
-                            status_code=422,
-                            detail=f"Estimated duration {estimated_duration_s:.1f}s exceeds limit {MAX_TOTAL_AUDIO_DURATION_S}s",
-                        )
+                # Estimate total duration for memory budget check
+                total_chars = sum(len(seg.text) for seg in segments)
+                estimated_duration_s = total_chars * 0.05  # ~50ms per char
 
-                    # Synthesize segments
-                    synthesis_start = time.time()
-                    result = await self._synthesize_segments(
-                        segments=[(seg.speaker, seg) for seg in segments],
-                        speaker_voices=speaker_voices,
-                        base_speed=req.speed,
-                        on_error=req.on_error,
-                        insert_pause_ms=req.insert_pause_ms,
+                if estimated_duration_s > MAX_TOTAL_AUDIO_DURATION_S:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            f"Estimated duration {estimated_duration_s:.1f}s "
+                            f"exceeds limit {MAX_TOTAL_AUDIO_DURATION_S}s"
+                        ),
                     )
-                    synthesis_time = time.time() - synthesis_start
 
-                    # Check if all segments failed
-                    audio_segments = [
-                        s for s in result.synthesized_segments if s["type"] == "audio"
-                    ]
-                    if not audio_segments:
-                        raise HTTPException(status_code=422, detail="All segments failed synthesis")
+                # Synthesize segments with total timeout (Python 3.9+ compatible)
+                synthesis_start = time.time()
+                try:
+                    result = await asyncio.wait_for(
+                        self._synthesize_segments(
+                            segments=[(seg.speaker, seg) for seg in segments],
+                            speaker_voices=speaker_voices,
+                            base_speed=req.speed,
+                            on_error=req.on_error,
+                            insert_pause_ms=req.insert_pause_ms,
+                        ),
+                        timeout=SCRIPT_TOTAL_TIMEOUT_S,
+                    )
+                except asyncio.TimeoutError:
+                    raise  # Re-raise to be caught by outer handler
+                synthesis_time = time.time() - synthesis_start
 
-                    # Record timestamps
-                    result.timestamps = {
-                        "voice_resolution_s": resolve_time,
-                        "synthesis_s": synthesis_time,
-                    }
+                # Check if all segments failed
+                audio_segments = [s for s in result.synthesized_segments if s["type"] == "audio"]
+                if not audio_segments:
+                    raise HTTPException(status_code=422, detail="All segments failed synthesis")
 
-                    # Record total latency
-                    total_latency = time.time() - start_time
-                    result.total_latency_s = total_latency
-                    self._metrics.record_latency(total_latency * 1000)
-                    self._metrics.increment_requests_success()
+                # Record timestamps
+                result.timestamps = {
+                    "voice_resolution_s": resolve_time,
+                    "synthesis_s": synthesis_time,
+                }
 
-                    return result
+                # Record total latency
+                total_latency = time.time() - start_time
+                result.total_latency_s = total_latency
+                self._metrics.record_latency(total_latency * 1000)
+                self._metrics.increment_requests_success()
+
+                return result
 
         except asyncio.TimeoutError:
             self._metrics.increment_requests_timeout()
