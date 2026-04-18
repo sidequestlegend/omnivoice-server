@@ -82,7 +82,7 @@ release: ## Create a new release (Usage: make release RELEASE_VERSION=0.3.0)
 	@echo "4/6 Creating git tag..."
 	git tag -a v$(RELEASE_VERSION) -m "Release v$(RELEASE_VERSION)"
 	@echo "5/6 Pushing to remote..."
-	git push --atomic origin main tags
+	git push origin HEAD:main && git push origin v$(RELEASE_VERSION)
 	@echo "6/6 Creating GitHub release..."
 	@gh release create v$(RELEASE_VERSION) \
 		--title "v$(RELEASE_VERSION)" \
