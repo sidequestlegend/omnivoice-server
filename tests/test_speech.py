@@ -42,19 +42,26 @@ def test_speech_design_voice(client):
     assert req.instruct == "male, middle-aged, moderate pitch, british accent"
 
 
-def test_speech_clone_profile_id_in_voice_selects_saved_profile(client, sample_audio_bytes):
+def test_full_clone_voice_workflow(client, sample_audio_bytes):
     resp = client.post(
         "/v1/voices/profiles",
-        data={"profile_id": "voice1"},
+        data={"profile_id": "chandra", "ref_text": "Hello world"},
         files={"ref_audio": ("ref.wav", io.BytesIO(sample_audio_bytes), "audio/wav")},
     )
     assert resp.status_code == 201
+    assert resp.json()["profile_id"] == "chandra"
+
+    resp = client.get("/v1/voices")
+    assert resp.status_code == 200
+    voices = resp.json()["voices"]
+    clone_ids = [v["id"] for v in voices if v.get("type") == "clone"]
+    assert "clone:chandra" in clone_ids
 
     resp = client.post(
         "/v1/audio/speech",
         json={
-            "input": "Hello",
-            "voice": "clone:voice1",
+            "input": "Hello this is a test",
+            "voice": "clone:chandra",
             "response_format": "pcm",
         },
     )
@@ -62,9 +69,19 @@ def test_speech_clone_profile_id_in_voice_selects_saved_profile(client, sample_a
     req = client.app.state.inference_svc.synthesize.await_args.args[0]
     assert req.mode == "clone"
     assert req.ref_audio_path is not None
-    assert req.ref_audio_path.endswith("/voice1/ref_audio.wav") or req.ref_audio_path.endswith(
-        "\\voice1\\ref_audio.wav"
+    assert "chandra" in req.ref_audio_path
+    assert req.ref_text == "Hello world"
+
+    resp = client.post(
+        "/v1/audio/speech",
+        json={
+            "input": "Hello",
+            "voice": "clone:nonexistent",
+            "response_format": "pcm",
+        },
     )
+    assert resp.status_code == 404
+    assert "nonexistent" in resp.json()["error"]["message"]
 
 
 def test_speech_auto_uses_default_design_prompt(client):
