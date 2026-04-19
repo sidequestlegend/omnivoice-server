@@ -727,7 +727,7 @@ def test_script_invalid_bare_voice_name_returns_422(client):
     )
 
     assert resp.status_code == 422
-    assert "Unsupported voice value" in resp.text
+    assert "Unsupported voice" in resp.text
 
 
 def test_script_malformed_tensor_handling(client):

@@ -82,7 +82,7 @@ def test_streaming_empty_text_rejected(client):
     assert resp.status_code == 422
 
 
-def test_streaming_bare_unknown_voice_falls_back_to_design(client):
+def test_streaming_bare_unknown_voice_returns_422(client):
     resp = client.post(
         "/v1/audio/speech",
         json={
@@ -92,7 +92,8 @@ def test_streaming_bare_unknown_voice_falls_back_to_design(client):
             "response_format": "pcm",
         },
     )
-    assert resp.status_code == 200
+    assert resp.status_code == 422
+    assert "Unsupported voice value" in resp.text
 
 
 def test_streaming_does_not_return_wav_header(client):
