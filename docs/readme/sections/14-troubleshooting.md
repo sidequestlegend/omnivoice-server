@@ -28,6 +28,38 @@ Increase inference steps for better quality:
 omnivoice-server --num-step 32
 ```
 
+### Windows Voice Cloning Fails with `libtorchcodec`
+
+If voice cloning fails during auto-transcription on Windows with an error like
+`RuntimeError: Could not load libtorchcodec`, the usual cause is an incompatible
+`torchcodec` installation.
+
+Short-term project behavior:
+
+- the default dev extra no longer installs `torchcodec` on Windows
+- auto-transcription now fails with a clearer error instead of an opaque `500`
+- voice cloning still works if you provide `ref_text` explicitly
+
+Recommended paths:
+
+```bash
+# Path 1: skip auto-transcription and provide ref_text yourself
+curl -X POST http://127.0.0.1:8880/v1/audio/speech/clone \
+  -F "input=Hello world" \
+  -F "file=@ref.wav" \
+  -F "ref_text=Reference transcript"
+```
+
+```bash
+# Path 2: if you want auto-transcription on Windows, keep torch/torchaudio/torchcodec aligned
+pip install torchcodec==0.11.1
+pip install torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu128 --upgrade
+```
+
+If you already have a working local workaround, you can keep using it. This repo fix
+is meant to make the default Windows path fail more safely and avoid pulling in an
+unhelpful torchcodec install through the dev extra.
+
 ### Browser CORS Errors
 
 If `curl` works but a browser frontend fails with a CORS error, the frontend and server are running on different origins and the browser is blocking the request.

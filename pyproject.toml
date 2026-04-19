@@ -46,7 +46,9 @@ dev = [
     "httpx>=0.27.0",
     "ruff>=0.6.0",
     "mypy>=1.11.0",
-    "torchcodec>=0.11",
+    # Keep torchcodec off Windows in the default dev extra.
+    # Windows users can still opt in manually if they align torch/torchaudio/torchcodec.
+    "torchcodec>=0.11; sys_platform != 'win32'",
 ]
 
 [project.urls]
