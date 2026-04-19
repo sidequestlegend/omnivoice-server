@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .config import Settings
@@ -91,6 +92,23 @@ def _status_to_code(status_code: int) -> str:
     return _map.get(status_code, f"http_{status_code}")
 
 
+def _cors_headers_for_origin(cfg: Settings, origin: str | None) -> dict[str, str]:
+    if not origin or not cfg.cors_allow_origins:
+        return {}
+    if "*" in cfg.cors_allow_origins and not cfg.cors_allow_credentials:
+        return {"Access-Control-Allow-Origin": "*"}
+    if origin not in cfg.cors_allow_origins:
+        return {}
+
+    headers = {
+        "Access-Control-Allow-Origin": origin,
+        "Vary": "Origin",
+    }
+    if cfg.cors_allow_credentials:
+        headers["Access-Control-Allow-Credentials"] = "true"
+    return headers
+
+
 def create_app(cfg: Settings) -> FastAPI:
     app = FastAPI(
         title="omnivoice-server",
@@ -103,20 +121,34 @@ def create_app(cfg: Settings) -> FastAPI:
 
     app.state.cfg = cfg
 
+    if cfg.cors_allow_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cfg.cors_allow_origins,
+            allow_credentials=cfg.cors_allow_credentials,
+            allow_methods=["*"],
+            allow_headers=["*"],
+            expose_headers=["X-Audio-Duration-S", "X-Synthesis-Latency-S"],
+        )
+
     # ── Auth middleware ───────────────────────────────────────────────────────
     if cfg.api_key:
 
         @app.middleware("http")
         async def auth_middleware(request: Request, call_next):
+            if request.method == "OPTIONS":
+                return await call_next(request)
             # Skip auth for health, metrics, and model listing
             if request.url.path in ("/health", "/metrics", "/v1/models"):
                 return await call_next(request)
             auth = request.headers.get("Authorization", "")
             if auth != f"Bearer {cfg.api_key}":
+                headers = {"WWW-Authenticate": "Bearer"}
+                headers.update(_cors_headers_for_origin(cfg, request.headers.get("Origin")))
                 return JSONResponse(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     content={"error": "Invalid or missing API key"},
-                    headers={"WWW-Authenticate": "Bearer"},
+                    headers=headers,
                 )
             return await call_next(request)
 

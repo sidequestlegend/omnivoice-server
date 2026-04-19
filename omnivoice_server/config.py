@@ -5,6 +5,7 @@ Priority: CLI flags > env vars > defaults.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -106,6 +107,23 @@ class Settings(BaseSettings):
         description="Optional Bearer token. Empty = no auth.",
     )
 
+    # CORS
+    cors_allow_origins: list[str] = Field(
+        default=[
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:5001",
+            "http://127.0.0.1:5001",
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+        ],
+        description="Allowed CORS origins for browser clients.",
+    )
+    cors_allow_credentials: bool = Field(
+        default=False,
+        description="Allow credentialed CORS requests. Requires explicit origins.",
+    )
+
     # Streaming
     stream_chunk_max_chars: int = Field(
         default=400,
@@ -147,6 +165,33 @@ class Settings(BaseSettings):
         except ImportError:
             pass
         return "cpu"
+
+    @field_validator("cors_allow_origins", mode="before")
+    @classmethod
+    def parse_cors_allow_origins(cls, value: object) -> object:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return []
+            if stripped.startswith("["):
+                parsed = json.loads(stripped)
+                if not isinstance(parsed, list):
+                    raise ValueError("cors_allow_origins must be a list of strings")
+                return parsed
+            return [origin.strip() for origin in stripped.split(",") if origin.strip()]
+        return value
+
+    @field_validator("cors_allow_credentials")
+    @classmethod
+    def validate_cors_credentials(cls, value: bool, info):
+        origins = info.data.get("cors_allow_origins", [])
+        if value and "*" in origins:
+            raise ValueError(
+                "cors_allow_credentials cannot be true when cors_allow_origins includes '*'"
+            )
+        return value
 
     @property
     def torch_dtype(self) -> torch.dtype:

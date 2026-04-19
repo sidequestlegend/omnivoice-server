@@ -257,26 +257,66 @@ From FastAPI source, if `allow_credentials=True`:
 
 **Usage after fix**:
 ```bash
-# Development (allow all origins)
-omnivoice-server --cors-origins "*"
-
-# Production (specific origins)
+# Development / browser frontend on another origin
 omnivoice-server --cors-origins "http://localhost:5001,https://app.example.com"
 
 # Or via env var
 OMNIVOICE_CORS_ALLOW_ORIGINS="http://localhost:5001,https://app.example.com"
 ```
 
+**Note**: The implemented default is an explicit local-development allowlist (`localhost`/`127.0.0.1` on ports `3000`, `5001`, and `5173`) rather than `"*"`, which is safer and avoids wildcard+credentials pitfalls.
+
 ---
 
-## 9. Implementation Checklist
+## 9. Implementation Status
 
-- [ ] Add `cors_allow_origins` and `cors_allow_credentials` fields to `Settings` class in `config.py`
-- [ ] Add `--cors-origins` CLI argument in `cli.py`
-- [ ] Add `CORSMiddleware` import and configuration in `app.py`
-- [ ] Update auth middleware to skip OPTIONS requests (or ensure CORS middleware runs before auth)
-- [ ] Test CORS with browser-based frontend
-- [ ] Document CORS configuration in README
+### Completed
+
+- [x] Added `cors_allow_origins` and `cors_allow_credentials` fields to `Settings` in `config.py`
+- [x] Added `--cors-origins`, `--cors-allow-credentials`, and `--no-cors-allow-credentials` in `cli.py`
+- [x] Added `CORSMiddleware` configuration in `app.py`
+- [x] Updated auth middleware so preflight `OPTIONS` requests are not blocked
+- [x] Added CORS headers to `401` auth failures for allowed origins so browser clients see the auth error instead of a generic CORS failure
+- [x] Documented CORS configuration and smoke-test commands in README sections
+
+### Automated Verification
+
+- `pytest tests/test_cors.py tests/test_speech.py`
+- Result: `112 passed`
+
+Covered cases include:
+
+- allowed-origin preflight success
+- disallowed-origin rejection
+- requested-header reflection in preflight
+- authenticated and unauthenticated browser-origin POST behavior
+- wildcard and empty-origin config behavior
+- settings parsing and invalid configuration validation
+
+### Live Smoke Verification
+
+Cross-origin smoke tests were executed against a live local server with:
+
+- server origin: `http://127.0.0.1:8899`
+- browser/test-page origin: `http://127.0.0.1:5001`
+
+Observed results:
+
+1. **Preflight** `OPTIONS /v1/audio/speech` returned `200 OK`
+   - `Access-Control-Allow-Origin: http://127.0.0.1:5001`
+   - `Access-Control-Allow-Headers: Content-Type,Authorization`
+
+2. **Unauthorized POST** returned `401 Unauthorized`
+   - still included `Access-Control-Allow-Origin: http://127.0.0.1:5001`
+   - browser clients can surface the real auth failure
+
+3. **Authorized POST** returned `200 OK`
+   - included `Access-Control-Allow-Origin: http://127.0.0.1:5001`
+   - included `Access-Control-Expose-Headers: X-Audio-Duration-S, X-Synthesis-Latency-S`
+
+### Final Resolution
+
+Issue #24's root cause was confirmed and is now resolved by configurable app-level CORS support plus auth/CORS interoperability fixes.
 
 ---
 

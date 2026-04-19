@@ -123,6 +123,25 @@ def main() -> None:
         dest="api_key",
         help="Bearer token for auth. Empty = no auth (env: OMNIVOICE_API_KEY)",
     )
+    parser.add_argument(
+        "--cors-origins",
+        default=None,
+        dest="cors_allow_origins",
+        help=("Comma-separated allowed CORS origins (env: OMNIVOICE_CORS_ALLOW_ORIGINS)"),
+    )
+    parser.add_argument(
+        "--cors-allow-credentials",
+        action="store_true",
+        default=None,
+        dest="cors_allow_credentials",
+        help="Allow credentialed CORS requests (env: OMNIVOICE_CORS_ALLOW_CREDENTIALS)",
+    )
+    parser.add_argument(
+        "--no-cors-allow-credentials",
+        action="store_false",
+        dest="cors_allow_credentials",
+        help="Disable credentialed CORS requests",
+    )
 
     args = parser.parse_args()
 
@@ -133,6 +152,7 @@ def main() -> None:
     cfg = Settings(**overrides)
 
     import sys
+
     logging.basicConfig(
         level=cfg.log_level.upper(),
         format="%(asctime)s [%(levelname)-5s] [%(name)s] %(message)s",
