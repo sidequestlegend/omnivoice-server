@@ -103,7 +103,7 @@ async def create_profile(
     Save a voice cloning profile.
     Use /v1/audio/speech/clone for synthesis with reference audio uploads.
     """
-    from ..utils.audio import read_upload_bounded, validate_audio_bytes
+    from ..utils.audio import preprocess_ref_audio, read_upload_bounded, validate_audio_bytes
 
     cfg = request.app.state.cfg  # FIX: was NameError previously
 
@@ -111,6 +111,7 @@ async def create_profile(
     try:
         audio_bytes = read_upload_bounded(raw, cfg.max_ref_audio_bytes)
         validate_audio_bytes(audio_bytes)
+        audio_bytes = preprocess_ref_audio(audio_bytes)
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -198,7 +199,7 @@ async def update_profile(
         )
 
     if ref_audio is not None:
-        from ..utils.audio import read_upload_bounded, validate_audio_bytes
+        from ..utils.audio import preprocess_ref_audio, read_upload_bounded, validate_audio_bytes
 
         cfg = request.app.state.cfg
         raw = await ref_audio.read()
@@ -206,6 +207,7 @@ async def update_profile(
             # FIX: PATCH was missing size + format validation entirely
             audio_bytes = read_upload_bounded(raw, cfg.max_ref_audio_bytes)
             validate_audio_bytes(audio_bytes)
+            audio_bytes = preprocess_ref_audio(audio_bytes)
         except ValueError as e:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -218,7 +220,7 @@ async def update_profile(
             overwrite=True,
         )
     else:
-        # Only updating ref_text — keep existing audio
+        # Only updating ref_text — keep existing (already preprocessed) audio
         audio_bytes = existing_path.read_bytes()
         meta = profile_svc.save_profile(
             profile_id=profile_id,

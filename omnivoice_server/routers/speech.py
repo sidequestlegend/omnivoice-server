@@ -458,12 +458,13 @@ async def create_speech_clone(
         except ValueError:
             pass  # Invalid Content-Length header — let body validation handle it
 
-    from ..utils.audio import read_upload_bounded, validate_audio_bytes
+    from ..utils.audio import preprocess_ref_audio, read_upload_bounded, validate_audio_bytes
 
     raw = await ref_audio.read()
     try:
         audio_bytes = read_upload_bounded(raw, cfg.max_ref_audio_bytes)
         validate_audio_bytes(audio_bytes)
+        audio_bytes = preprocess_ref_audio(audio_bytes)
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,

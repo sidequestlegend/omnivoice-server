@@ -243,6 +243,73 @@ def validate_audio_bytes(data: bytes, field_name: str = "ref_audio") -> None:
         ) from e
 
 
+def preprocess_ref_audio(
+    data: bytes,
+    target_sr: int = SAMPLE_RATE,
+    trim_top_db: float = 30.0,
+    min_duration_s: float = 1.0,
+    field_name: str = "ref_audio",
+) -> bytes:
+    """
+    Normalise a clone reference clip to 16-bit PCM WAV at `target_sr` (24 kHz), mono,
+    with leading/trailing silence trimmed. Doing this once at save time removes
+    per-synthesis cost: no decode, no resample, no downmix on each call.
+
+    Raises ValueError if the clip is entirely silent (< `min_duration_s` after trim).
+    """
+    import librosa
+
+    try:
+        audio, src_sr = sf.read(io.BytesIO(data), dtype="float32", always_2d=False)
+    except Exception as e:
+        raise ValueError(
+            f"{field_name}: could not decode audio. "
+            "Supported formats: WAV, MP3, FLAC, OGG. "
+            f"Original error: {e}"
+        ) from e
+
+    src_channels = 1 if audio.ndim == 1 else audio.shape[1]
+    src_duration = audio.shape[0] / src_sr
+
+    # Downmix to mono
+    if audio.ndim == 2 and audio.shape[1] > 1:
+        audio = audio.mean(axis=1)
+    elif audio.ndim == 2:
+        audio = audio[:, 0]
+    audio = np.asarray(audio, dtype=np.float32)
+
+    # Trim leading/trailing silence (top_db lower = more aggressive)
+    trimmed, _ = librosa.effects.trim(audio, top_db=trim_top_db)
+    if trimmed.size > 0:
+        audio = trimmed
+
+    # Resample to target_sr if needed
+    if src_sr != target_sr:
+        audio = librosa.resample(audio, orig_sr=src_sr, target_sr=target_sr, res_type="soxr_hq")
+
+    out_duration = audio.shape[0] / target_sr
+    if out_duration < min_duration_s:
+        raise ValueError(
+            f"{field_name}: after trimming silence, only {out_duration:.2f}s remain "
+            f"(need ≥ {min_duration_s}s of actual speech). Re-record with continuous speech."
+        )
+
+    # Encode as 16-bit PCM WAV
+    buf = io.BytesIO()
+    sf.write(buf, audio, target_sr, format="WAV", subtype="PCM_16")
+    buf.seek(0)
+
+    logger.info(
+        "ref_audio preprocessed: %d→%d Hz, %d→1 ch, %.2f→%.2fs",
+        src_sr,
+        target_sr,
+        src_channels,
+        src_duration,
+        out_duration,
+    )
+    return buf.read()
+
+
 @dataclass
 class SegmentTimestamp:
     """Timestamp metadata for a single audio segment in a mixed track."""

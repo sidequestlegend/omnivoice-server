@@ -462,9 +462,18 @@ Do not invent new tags. Do not describe actions in brackets. Do not use emoji.</
             <button id="tts-ref-tab-record" class="clone-tab" type="button">🎤 Record</button>
           </div>
 
+          <div class="clone-suggest" style="margin:6px 0; padding:8px 10px; background:var(--bg-alt,#1b1b1f); border:1px solid var(--border,#2a2a30); border-radius:6px; font-size:12px; line-height:1.4">
+            <div style="display:flex; align-items:baseline; gap:6px; margin-bottom:4px">
+              <span style="font-size:11px; opacity:0.7">💡 Suggested prompt · ~6 s at natural pace</span>
+              <div style="flex:1"></div>
+              <button id="tts-clone-use-suggest" class="secondary" type="button" style="padding:2px 8px; font-size:11px" title="Copy this sentence into the Reference text field">Use as ref text</button>
+            </div>
+            <div id="tts-clone-suggest-text" style="font-style:italic; opacity:0.9">My favorite hobby is exploring old bookshops on quiet Sunday afternoons when the light falls just right.</div>
+          </div>
+
           <div id="tts-ref-pane-upload" class="clone-pane">
             <input id="tts-clone-file" type="file" accept=".wav,.mp3,.flac,.ogg,audio/*">
-            <span class="hint">WAV, MP3, FLAC, OGG · ≥ 8 kHz · ≤ 25 MB</span>
+            <span class="hint">WAV, MP3, FLAC, OGG · ≥ 8 kHz · ≤ 25 MB · server resamples to 24 kHz mono &amp; trims silence on save</span>
           </div>
 
           <div id="tts-ref-pane-record" class="clone-pane" hidden>
@@ -473,7 +482,7 @@ Do not invent new tags. Do not describe actions in brackets. Do not use emoji.</
               <span id="tts-clone-rec-timer" class="rec-timer">00:00.0</span>
             </div>
             <div class="meter"><div id="tts-clone-rec-meter" class="meter-bar"></div></div>
-            <span class="hint">5–30 s of clean speech works best. Native mic rate (often 48 kHz) → encoded to 16-bit WAV on stop.</span>
+            <span class="hint"><strong>5–8 s ideal</strong> (up to 30 s OK). Server resamples to 24 kHz mono &amp; trims leading/trailing silence on save — longer clips = slower synthesis.</span>
           </div>
 
           <div id="tts-clone-rec-status" class="clone-status neutral">no audio selected</div>
@@ -1377,6 +1386,13 @@ async function transcribeRecording() {
 }
 
 transcribeBtn.addEventListener("click", transcribeRecording);
+
+// "Use as ref text" button: copy the suggested sentence into the ref-text field.
+$("#tts-clone-use-suggest").addEventListener("click", () => {
+  const suggested = $("#tts-clone-suggest-text").textContent.trim();
+  cloneText.value = suggested;
+  cloneText.focus();
+});
 
 cloneRecBtn.addEventListener("click", () => {
   if (recCtx) stopRec();
