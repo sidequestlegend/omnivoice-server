@@ -117,6 +117,16 @@ class Settings(BaseSettings):
         le=2000,
         description="Minimum interval between transcript emission attempts, in ms.",
     )
+    stt_idle_flush_ms: int = Field(
+        default=1200,
+        ge=200,
+        le=10000,
+        description=(
+            "After this long without new audio, force session.finish() so a FINAL "
+            "fires even when Silero VAD gets stuck in its 0.35–0.50 hysteresis band. "
+            "Keep above ~800 ms so natural mid-sentence pauses don't trigger it."
+        ),
+    )
     stt_init_prompt: str | None = Field(
         default=None,
         description="Optional initial prompt text to bias the decoder (scrolls with context).",

@@ -75,6 +75,12 @@ class STTSession:
         self._model_svc = model_svc
         self._session_start = session_start
         self._closed = False
+        # Idle-flush watchdog state (see _emitter_loop in routers/transcribe.py).
+        # last_audio_ts tracks when the most recent audio chunk arrived; when
+        # emissions have been quiet for stt_idle_flush_ms we force a finish()
+        # to catch VAD-stuck utterances.
+        self.last_audio_ts: float = time.monotonic()
+        self.speech_since_last_flush: bool = False
 
     def insert_audio_chunk(self, pcm_int16_le: bytes) -> None:
         """Append raw PCM int16 LE @ 16 kHz mono to the session buffer. Non-blocking."""
@@ -84,6 +90,8 @@ class STTSession:
         if audio.size == 0:
             return
         self._online.insert_audio_chunk(audio)
+        self.last_audio_ts = time.monotonic()
+        self.speech_since_last_flush = True
 
     async def process_iter(self) -> TranscriptUpdate | None:
         """Run one inference pass. Serialised across all sessions via the shared lock."""
@@ -129,15 +137,19 @@ class STTSession:
         *,
         is_final: bool,
     ) -> TranscriptUpdate | None:
-        if not raw or not raw.get("text"):
+        if raw is None:
             return None
-        # SimulStreaming emits seconds in 'start'/'end' and an optional 'is_final'
-        # on VAC-wrapped processors; trust VAC's flag when present, else use our arg.
-        effective_final = bool(raw.get("is_final", is_final))
+        text = str(raw.get("text", ""))
+        # Caller's is_final=True means "forced finish" — don't let a stale
+        # raw["is_final"]=False from VAC downgrade it. Empty-text forced finals
+        # still pass through so clients always get the end-of-utterance signal.
+        effective_final = is_final or bool(raw.get("is_final", False))
+        if not text and not effective_final:
+            return None
         return TranscriptUpdate(
             start_ms=int(round(float(raw.get("start", 0.0)) * 1000)),
             end_ms=int(round(float(raw.get("end", 0.0)) * 1000)),
-            text=str(raw["text"]),
+            text=text,
             is_final=effective_final,
             emission_time_ms=int(round((time.monotonic() - self._session_start) * 1000)),
         )

@@ -118,12 +118,19 @@ def stt_client(stt_settings):
     # process_iter() and a canned final on finish().
     class _FakeSession:
         def __init__(self):
+            import time as _time
             self.chunks: list[bytes] = []
             self.closed = False
             self.iters = 0
+            # Attributes the idle-flush watchdog reads (see emitter_loop)
+            self.last_audio_ts = _time.monotonic()
+            self.speech_since_last_flush = False
 
         def insert_audio_chunk(self, pcm_bytes: bytes) -> None:
+            import time as _time
             self.chunks.append(pcm_bytes)
+            self.last_audio_ts = _time.monotonic()
+            self.speech_since_last_flush = True
 
         async def process_iter(self):
             self.iters += 1

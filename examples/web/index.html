@@ -1363,6 +1363,12 @@ async function transcribeRecording() {
         ws.send(new Int16Array(slice).buffer);
         await new Promise(r => setTimeout(r, chunkMs));
       }
+      // Diagnostic: sending EOF the instant the last byte is on the wire races
+      // Whisper's tail decode — the server's finish() only sees ~200 ms of
+      // residual buffer and truncates the final ("…when the" + " right" rather
+      // than "…when the light falls just right"). Waiting 500 ms before EOF
+      // lets the server-side drain loop emit the full tail before shutdown.
+      await new Promise(r => setTimeout(r, 500));
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: "eof" }));
       }

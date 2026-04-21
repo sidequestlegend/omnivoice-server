@@ -103,7 +103,14 @@ async def transcribe_ws(websocket: WebSocket) -> None:
 
     reader = asyncio.create_task(_reader_loop(websocket, session, stop_event, eof_event))
     emitter = asyncio.create_task(
-        _emitter_loop(websocket, session, cfg.stt_emit_interval_ms, stop_event, eof_event)
+        _emitter_loop(
+            websocket,
+            session,
+            cfg.stt_emit_interval_ms,
+            cfg.stt_idle_flush_ms,
+            stop_event,
+            eof_event,
+        )
     )
 
     try:
@@ -184,6 +191,7 @@ async def _handle_control(
         # resets internal state so the session stays open for the next utterance.
         try:
             final = await session.finish()
+            session.speech_since_last_flush = False
             if final is not None:
                 await _safe_send_update(websocket, final)
         except Exception:
@@ -199,11 +207,24 @@ async def _emitter_loop(
     websocket: WebSocket,
     session: STTSession,
     emit_interval_ms: int,
+    idle_flush_ms: int,
     stop_event: asyncio.Event,
     eof_event: asyncio.Event,
 ) -> None:
-    """Poll the session for transcript updates and forward them to the client."""
+    """Poll the session for transcript updates and forward them to the client.
+
+    Two reliability fixes live here:
+      - Idle-audio watchdog: if audio has been seen but nothing new arrives for
+        `idle_flush_ms`, force a finish() so FINAL still fires even when VAC's
+        hysteresis keeps it "triggered" on background noise.
+      - Drain-on-EOF: before returning after eof_event, keep calling
+        process_iter() long enough for Whisper to decode any audio that arrived
+        just before EOF (fixes clone-transcribe tail clipping).
+    """
+    import time
+
     interval_s = max(emit_interval_ms, 50) / 1000.0
+    idle_flush_s = max(idle_flush_ms, 200) / 1000.0
     try:
         while not stop_event.is_set() and not eof_event.is_set():
             try:
@@ -215,6 +236,44 @@ async def _emitter_loop(
             update = await session.process_iter()
             if update is not None:
                 await _safe_send_update(websocket, update)
+
+            # Idle-audio watchdog: when audio has been seen but the session has
+            # been idle past the threshold, force a final.
+            now = time.monotonic()
+            if (
+                session.speech_since_last_flush
+                and (now - session.last_audio_ts) > idle_flush_s
+            ):
+                logger.info(
+                    "idle flush (no audio for %.2fs) → session.finish()",
+                    now - session.last_audio_ts,
+                )
+                session.speech_since_last_flush = False
+                try:
+                    final = await session.finish()
+                    if final is not None:
+                        await _safe_send_update(websocket, final)
+                except Exception:
+                    logger.exception("idle flush failed")
+
+        # Post-EOF drain: emit any tail that Whisper finishes decoding in the
+        # next ~500 ms before we let the finally-block finish() run.
+        drain_deadline = time.monotonic() + 0.5
+        while time.monotonic() < drain_deadline and not stop_event.is_set():
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=interval_s)
+                return
+            except asyncio.TimeoutError:
+                pass
+            try:
+                update = await session.process_iter()
+            except Exception:
+                logger.debug("post-EOF process_iter failed", exc_info=True)
+                break
+            if update is None:
+                # No new output from this tick — one more try then stop.
+                break
+            await _safe_send_update(websocket, update)
     except asyncio.CancelledError:
         raise
     except Exception:
