@@ -520,14 +520,178 @@ async function playTTS(override) {
   }
 }
 ttsPlayBtn.addEventListener("click", () => playTTS());
+
+// Pipeline-mode sentence-streaming queue (shared AudioContext so sentences
+// concatenate seamlessly without re-creating the audio graph each request).
+let ttsPipeCtx = null;
+let ttsPipeNextTime = 0;
+const ttsPipeQueue = [];
+let ttsPipeBusy = false;
+let ttsPipeAbort = null;
+let ttsPipeLastEndedAt = 0;
+
+function pipeAudioCtx() {
+  if (!ttsPipeCtx || ttsPipeCtx.state === "closed") {
+    ttsPipeCtx = new (window.AudioContext || window.webkitAudioContext)();
+    ttsPipeNextTime = ttsPipeCtx.currentTime;
+    ttsPipeLastEndedAt = ttsPipeCtx.currentTime;
+  }
+  return ttsPipeCtx;
+}
+
+function abortPipelineTTS(reason) {
+  ttsPipeQueue.length = 0;
+  if (ttsPipeAbort) { try { ttsPipeAbort.abort(); } catch (_) {} ttsPipeAbort = null; }
+  if (ttsPipeCtx) { try { ttsPipeCtx.close(); } catch (_) {} ttsPipeCtx = null; }
+  ttsPipeBusy = false;
+  if (reason) logTo(ttsLog, "warn", reason, ts(performance.now()));
+}
+
+function enqueueTTS(text) {
+  const t = (text || "").trim();
+  if (!t) return;
+  ttsPipeQueue.push(t);
+  setStage("tts");
+  if (!ttsPipeBusy) processTTSQueue();
+}
+
+async function processTTSQueue() {
+  ttsPipeBusy = true;
+  try {
+    while (ttsPipeQueue.length > 0) {
+      const sentence = ttsPipeQueue.shift();
+      await synthSentence(sentence);
+    }
+  } finally {
+    ttsPipeBusy = false;
+  }
+  // Wait for any scheduled audio tail to finish before returning to LISTEN.
+  if (ttsPipeCtx) {
+    const remaining = Math.max(0, ttsPipeLastEndedAt - ttsPipeCtx.currentTime);
+    if (remaining > 0) await new Promise(r => setTimeout(r, remaining * 1000 + 80));
+  }
+  if (window.pipelineMode && ttsPipeQueue.length === 0) setStage("stt");
+}
+
+async function synthSentence(text) {
+  const voice = $("#tts-voice").value.trim() || "auto";
+  const speed = parseFloat($("#tts-speed").value);
+  const t0 = performance.now();
+  ttsPipeAbort = new AbortController();
+  logTo(ttsLog, "info", `→ synth "${text.slice(0, 60)}${text.length > 60 ? "…" : ""}"`, ts(t0));
+  try {
+    const res = await fetch(baseUrl() + "/v1/audio/speech", {
+      method: "POST",
+      signal: ttsPipeAbort.signal,
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({
+        model: "omnivoice", input: text, voice, speed,
+        response_format: "pcm", stream: true,
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`);
+    }
+    const sampleRate = parseInt(res.headers.get("X-Audio-Sample-Rate") || "24000", 10);
+    const ctx = pipeAudioCtx();
+    const reader = res.body.getReader();
+    let leftover = new Uint8Array(0);
+    let firstByte = null, chunkCount = 0, bytes = 0, audioSec = 0;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (firstByte === null) {
+        firstByte = performance.now();
+        $("#tts-ttfb").textContent = Math.round(firstByte - t0) + " ms";
+        logTo(ttsLog, "info", `TTFB ${Math.round(firstByte - t0)}ms`, ts(t0));
+      }
+      bytes += value.length; chunkCount++;
+      const combined = new Uint8Array(leftover.length + value.length);
+      combined.set(leftover); combined.set(value, leftover.length);
+      const evenLen = combined.length - (combined.length % 2);
+      const take = combined.subarray(0, evenLen);
+      leftover = combined.subarray(evenLen);
+      const int16 = new Int16Array(take.buffer, take.byteOffset, take.length / 2);
+      const float32 = new Float32Array(int16.length);
+      let peak = 0;
+      for (let i = 0; i < int16.length; i++) {
+        const v = int16[i] / 32768; float32[i] = v;
+        const a = Math.abs(v); if (a > peak) peak = a;
+      }
+      const buf = ctx.createBuffer(1, float32.length, sampleRate);
+      buf.copyToChannel(float32, 0);
+      const src = ctx.createBufferSource();
+      src.buffer = buf; src.connect(ctx.destination);
+      const startAt = Math.max(ttsPipeNextTime, ctx.currentTime);
+      src.start(startAt);
+      ttsPipeNextTime = startAt + buf.duration;
+      ttsPipeLastEndedAt = ttsPipeNextTime;
+      audioSec += buf.duration;
+      ttsMeter.style.width = (peak * 100).toFixed(0) + "%";
+      ttsWave.push(float32);
+      $("#tts-chunks").textContent = chunkCount;
+      $("#tts-duration").textContent = audioSec.toFixed(2) + "s";
+    }
+    logTo(ttsLog, "tts-chunk", `"${text.slice(0, 30)}${text.length > 30 ? "…" : ""}" · ${bytes}B · ${audioSec.toFixed(2)}s`, ts(t0));
+  } catch (e) {
+    if (e.name === "AbortError") logTo(ttsLog, "warn", "sentence aborted", ts(t0));
+    else logTo(ttsLog, "err", String(e.message || e), ts(t0));
+  } finally {
+    ttsPipeAbort = null;
+  }
+}
+
 function stopTTS(reason) {
   if (ttsAbort) { try { ttsAbort.abort(); } catch (_) {} }
   if (ttsCtx) { try { ttsCtx.close(); } catch (_) {} ttsCtx = null; }
+  abortPipelineTTS(null);
   if (reason) logTo(ttsLog, "warn", reason, ts(performance.now()));
 }
 function isTTSPlaying() {
-  return ttsAbort !== null || (ttsCtx && ttsCtx.currentTime < ttsLastEndedAt);
+  if (ttsAbort !== null) return true;
+  if (ttsCtx && ttsCtx.currentTime < ttsLastEndedAt) return true;
+  if (ttsPipeAbort !== null || ttsPipeQueue.length > 0) return true;
+  if (ttsPipeCtx && ttsPipeCtx.currentTime < ttsPipeLastEndedAt) return true;
+  return false;
 }
+
+// Split a text buffer on sentence terminators. Returns [sentences[], remainder].
+// Splits only when terminator is followed by whitespace (so "3.14" is preserved).
+function extractSentences(buf) {
+  const out = [];
+  let last = 0, i = 0;
+  while (i < buf.length) {
+    const c = buf[i];
+    if (c === "\n") {
+      const s = buf.slice(last, i);
+      if (s.trim().length > 0) out.push(s.trim());
+      i++; last = i;
+      continue;
+    }
+    if (c === "." || c === "!" || c === "?" || c === "…") {
+      let end = i + 1;
+      // Greedy multiple terminators: "...!"  "?!" etc.
+      while (end < buf.length && ".!?…".includes(buf[end])) end++;
+      // Accept trailing quotes / closing brackets as still-within-sentence.
+      while (end < buf.length && "\"')]}".includes(buf[end])) end++;
+      if (end < buf.length && /\s/.test(buf[end])) {
+        // Consume all whitespace as the boundary.
+        while (end < buf.length && /\s/.test(buf[end])) end++;
+        const s = buf.slice(last, end);
+        if (s.trim().length > 0) out.push(s.trim());
+        last = end; i = end;
+        continue;
+      }
+      i = end;
+      continue;
+    }
+    i++;
+  }
+  return [out, buf.slice(last)];
+}
+
 ttsStopBtn.addEventListener("click", () => stopTTS("stop clicked"));
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -561,7 +725,16 @@ async function startSTT() {
   sttT0 = performance.now();
 
   try {
-    sttMediaStream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+    // Disable echoCancellation + AGC for a headset mic — they otherwise make
+    // input levels swim, which breaks a threshold-based barge-in detector.
+    sttMediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        echoCancellation: false,
+        noiseSuppression: true,
+        autoGainControl: false,
+      },
+    });
   } catch (e) {
     logTo(sttLog, "err", "mic permission denied: " + e, ts(sttT0));
     return;
@@ -637,33 +810,47 @@ function startMicPump(inputRate, targetRate, ratio) {
   sttProcessor = sttCtx.createScriptProcessor(bufSize, 1, 1);
   let carry = new Float32Array(0);
 
-  // Barge-in: track consecutive loud frames while TTS is playing.
+  // Barge-in: use peak level (matches the visible meter) and count consecutive
+  // loud frames while TTS is playing. Tune BARGE_PEAK_THRESHOLD to your mic —
+  // check what your normal speaking voice shows on the meter and set this a
+  // bit below that.
   let loudFrames = 0;
-  const BARGE_THRESHOLD = 0.08; // ~-22 dBFS — tune if too sensitive/insensitive
-  const BARGE_FRAMES = 3; // ~250 ms at 4096 samples on 48 kHz
+  let bargeAlerted = false; // emit the "detecting…" log only once per barge attempt
+  const BARGE_PEAK_THRESHOLD = 0.08; // ~8% on the meter
+  const BARGE_FRAMES = 2; // ~170 ms at 4096 samples on 48 kHz
 
   sttProcessor.onaudioprocess = (e) => {
     const input = e.inputBuffer.getChannelData(0);
     sttWave.push(input);
 
-    // Compute quick RMS for barge-in detection (before resampling)
-    let sumSq = 0;
-    for (let i = 0; i < input.length; i++) sumSq += input[i] * input[i];
-    const rms = Math.sqrt(sumSq / input.length);
+    // Peak in this frame (same metric as the meter)
+    let peakIn = 0;
+    for (let i = 0; i < input.length; i++) {
+      const a = Math.abs(input[i]);
+      if (a > peakIn) peakIn = a;
+    }
+
     if (isTTSPlaying()) {
-      if (rms > BARGE_THRESHOLD) {
+      if (peakIn > BARGE_PEAK_THRESHOLD) {
         loudFrames++;
+        if (!bargeAlerted && loudFrames === 1) {
+          bargeAlerted = true;
+          logTo(sttLog, "warn", `mic active · peak ${peakIn.toFixed(3)} (barge-in requires ${BARGE_FRAMES} loud frames)`, ts(sttT0));
+        }
         if (loudFrames >= BARGE_FRAMES) {
-          stopTTS(`barge-in (rms ${rms.toFixed(3)})`);
+          stopTTS(`barge-in · peak ${peakIn.toFixed(3)}`);
           if (llmAbort) { try { llmAbort.abort(); } catch (_) {} }
           setStage("stt");
           loudFrames = 0;
+          bargeAlerted = false;
         }
       } else {
         loudFrames = 0;
+        bargeAlerted = false;
       }
     } else {
       loudFrames = 0;
+      bargeAlerted = false;
     }
     // Simple decimation with averaging — poor man's anti-aliasing. Fine for speech.
     const combined = new Float32Array(carry.length + input.length);
@@ -801,6 +988,8 @@ async function llmSend(override) {
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let carry = "";
+    // In pipeline mode, buffer tokens and emit to TTS at sentence boundaries.
+    let sentenceBuf = "";
 
     while (true) {
       const { done, value } = await reader.read();
@@ -824,6 +1013,12 @@ async function llmSend(override) {
           assistantText += obj.message.content;
           assistantTxt.textContent = assistantText;
           llmChat.scrollTop = llmChat.scrollHeight;
+          if (window.pipelineMode) {
+            sentenceBuf += obj.message.content;
+            const [sentences, remainder] = extractSentences(sentenceBuf);
+            sentenceBuf = remainder;
+            for (const sent of sentences) enqueueTTS(sent);
+          }
         }
 
         if (obj.done) {
@@ -837,14 +1032,14 @@ async function llmSend(override) {
           logTo(llmLog, "info",
             `done · ${tokenCount} tok · ${total_s.toFixed(2)}s · ${tps} tok/s`,
             ts(t0));
+          if (window.pipelineMode && sentenceBuf.trim()) {
+            enqueueTTS(sentenceBuf.trim());
+            sentenceBuf = "";
+          }
         }
       }
     }
     llmMessages.push({ role: "assistant", content: assistantText });
-    if (window.pipelineMode && assistantText.trim()) {
-      setStage("tts");
-      playTTS(assistantText).finally(() => setStage("stt"));
-    }
   } catch (e) {
     if (e.name === "AbortError") {
       logTo(llmLog, "warn", "aborted", ts(t0));
