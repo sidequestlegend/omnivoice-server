@@ -61,6 +61,109 @@
   .switch input:checked ~ .label { color: var(--ok); }
 
   body.pipeline-on .panel { border-color: #2e5a44; box-shadow: 0 0 0 1px #1a3d2a inset; }
+
+  /* Clone form ────────────────────────────────────────────────────────── */
+  .clone-form {
+    display: none;
+    flex-direction: column; gap: 14px;
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 14px 16px;
+  }
+  .clone-form.open { display: flex; }
+  .clone-form-head {
+    display: flex; align-items: center; gap: 10px;
+    padding-bottom: 10px; border-bottom: 1px solid var(--border);
+  }
+  .clone-form-head h3 {
+    margin: 0; font-size: 13px; letter-spacing: .5px; color: var(--accent);
+    flex: 1; text-transform: uppercase;
+  }
+  .clone-field { display: flex; flex-direction: column; gap: 5px; }
+  .clone-field .hint {
+    color: var(--muted); font-size: 11px; font-family: var(--mono);
+  }
+  .clone-field .hint-inline { color: var(--muted); font-weight: normal; font-size: 11px; }
+
+  .clone-tabs {
+    display: inline-flex; gap: 2px; padding: 3px;
+    background: #0a0d13; border: 1px solid var(--border); border-radius: 6px;
+    width: fit-content;
+  }
+  .clone-tab {
+    background: transparent; color: var(--muted); border: none;
+    padding: 6px 14px; border-radius: 4px; font-size: 12px; font-weight: 500;
+    cursor: pointer;
+  }
+  .clone-tab.active { background: var(--panel); color: var(--text); }
+  .clone-tab:hover:not(.active) { color: var(--text); }
+
+  .clone-pane { display: flex; flex-direction: column; gap: 6px; padding-top: 2px; }
+  .clone-pane[hidden] { display: none !important; }
+
+  .rec-controls { display: flex; gap: 12px; align-items: center; }
+  .rec-btn {
+    background: var(--panel); color: var(--text); border: 1px solid var(--border);
+    padding: 10px 18px; border-radius: 6px; font-weight: 600; cursor: pointer;
+    transition: background .15s, border-color .15s;
+  }
+  .rec-btn:hover { border-color: var(--accent); }
+  .rec-btn.recording {
+    background: #2a1414; color: var(--err); border-color: #5a2e2e;
+  }
+  .rec-btn.recording::before {
+    content: "●"; margin-right: 6px; color: var(--err); animation: blink 1s infinite;
+  }
+  .rec-timer {
+    font-family: var(--mono); font-size: 18px; color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .rec-btn.recording ~ .rec-timer { color: var(--err); }
+
+  .clone-status {
+    font-family: var(--mono); font-size: 11px; padding: 6px 10px;
+    border-radius: 4px; min-height: 16px;
+  }
+  .clone-status.neutral { background: #0a0d13; color: var(--muted); border: 1px solid var(--border); }
+  .clone-status.ok { background: #10251b; color: var(--ok); border: 1px solid #2e5a44; }
+  .clone-status.err { background: #251010; color: var(--err); border: 1px solid #5a2e2e; }
+  .clone-status.info { background: #10202a; color: var(--accent); border: 1px solid #2a3e5a; }
+
+  .clone-footer {
+    display: flex; align-items: center; gap: 10px;
+    padding-top: 10px; border-top: 1px solid var(--border);
+  }
+
+  /* Design attributes help ────────────────────────────────────────────── */
+  .link-btn {
+    background: none; color: var(--accent); border: none; padding: 0 0 0 6px;
+    font-size: 11px; cursor: pointer; text-transform: none;
+  }
+  .link-btn:hover { filter: brightness(1.2); }
+
+  .design-help {
+    background: #0a0d13; border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px 12px; margin-top: 4px; display: flex; flex-direction: column; gap: 8px;
+  }
+  .design-help[hidden] { display: none; }
+  .design-rule {
+    margin: 0; font-size: 12px; line-height: 1.45; color: var(--muted);
+  }
+  .design-rule strong { color: var(--text); font-weight: 600; }
+
+  .design-cat { display: flex; flex-direction: column; gap: 3px; }
+  .design-cat-label {
+    color: var(--accent-2); font-size: 10px; font-family: var(--mono);
+    letter-spacing: 1px; text-transform: uppercase;
+  }
+  .design-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+  .design-chip {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    padding: 3px 9px; border-radius: 999px; font-size: 11px; cursor: pointer;
+    transition: background .15s, border-color .15s;
+    font-family: inherit;
+  }
+  .design-chip:hover { border-color: var(--accent); background: #172338; }
+  .design-chip.picked { background: #10251b; border-color: #2e5a44; color: var(--ok); }
   .pipeline-stage {
     display: none; padding: 3px 8px; border-radius: 4px; font-size: 10px; font-family: var(--mono);
     letter-spacing: 1px; background: var(--panel-2); color: var(--muted); border: 1px solid var(--border);
@@ -244,12 +347,20 @@
         </div>
         <div class="col" style="flex:1">
           <label class="small">Model</label>
-          <input id="llm-model" type="text" value="gemma4">
+          <input id="llm-model" type="text" value="qwen3.5">
         </div>
       </div>
 
       <label class="small">System prompt (optional)</label>
-      <textarea id="llm-system" rows="2" style="min-height:44px">You are a concise assistant.</textarea>
+      <textarea id="llm-system" rows="6" style="min-height:120px">You are a concise, natural-sounding voice assistant. Keep replies short and conversational.
+
+Use only basic punctuation — periods, commas, and hyphens. Avoid semicolons, colons, parentheses, em dashes, ellipses, and exclamation marks unless strictly necessary.
+
+You may occasionally insert short non-verbal expressions to sound more human. They MUST be wrapped in square brackets, placed inline in the sentence where the sound belongs, and used sparingly (at most one per reply). Supported tags:
+
+[laughter], [sigh], [confirmation-en], [question-en], [question-ah], [question-oh], [question-ei], [question-yi], [surprise-ah], [surprise-oh], [surprise-wa], [surprise-yo], [dissatisfaction-hnn]
+
+Do not invent new tags. Do not describe actions in brackets. Do not use emoji.</textarea>
 
       <label class="small">Conversation</label>
       <div id="llm-chat" class="chat"></div>
@@ -290,7 +401,12 @@
       <div class="row">
         <div class="col" style="flex:1">
           <label class="small">Voice</label>
-          <input id="tts-voice" type="text" value="auto">
+          <div style="display:flex; gap:6px">
+            <select id="tts-voice" style="flex:1"></select>
+            <button id="tts-voices-reload" class="secondary" title="Refresh voice list" style="padding:7px 10px">↻</button>
+            <button id="tts-clone-toggle" class="secondary" title="Clone a new voice" style="padding:7px 10px">＋</button>
+            <button id="tts-voice-delete" class="danger" title="Delete selected clone" style="padding:7px 10px" disabled>🗑</button>
+          </div>
         </div>
         <div class="col">
           <label class="small">Speed <span id="tts-speed-v">1.0</span>x</label>
@@ -302,6 +418,80 @@
         <div class="col" style="justify-content:flex-end">
           <button id="tts-stop" class="danger" disabled>Stop</button>
         </div>
+      </div>
+
+      <!-- Design attribute input: revealed only when the user picks the "design (custom)" option. -->
+      <div id="tts-design-row" class="col" style="display:none">
+        <label class="small">
+          Design attributes
+          <button id="tts-design-help-toggle" type="button" class="link-btn">show help</button>
+        </label>
+        <input id="tts-design-attrs" type="text" placeholder="e.g. female, young adult, british accent">
+
+        <div id="tts-design-help" class="design-help" hidden>
+          <p class="design-rule">
+            Comma-separated attributes. <strong>Pick at most one value per category.</strong>
+            Omit categories you don't care about — the model fills the rest.
+            English accents apply to English speech, Chinese dialects to Chinese.
+            You can mix English and Chinese text; the model auto-detects the language.
+          </p>
+          <div id="tts-design-categories"></div>
+        </div>
+      </div>
+
+      <!-- Clone form — revealed by ＋ button. Single column, clean sections. -->
+      <div id="tts-clone-form" class="clone-form">
+        <div class="clone-form-head">
+          <h3>Clone a new voice</h3>
+          <button id="tts-clone-cancel" class="secondary" type="button" title="Close" style="padding:4px 10px">✕</button>
+        </div>
+
+        <div class="clone-field">
+          <label class="small">Profile ID</label>
+          <input id="tts-clone-id" type="text" placeholder="my_voice">
+          <span class="hint">letters, digits, underscore, dash · 1–64 chars</span>
+        </div>
+
+        <div class="clone-field">
+          <label class="small">Reference audio</label>
+          <div class="clone-tabs" role="tablist">
+            <button id="tts-ref-tab-upload" class="clone-tab active" type="button">📁 Upload file</button>
+            <button id="tts-ref-tab-record" class="clone-tab" type="button">🎤 Record</button>
+          </div>
+
+          <div id="tts-ref-pane-upload" class="clone-pane">
+            <input id="tts-clone-file" type="file" accept=".wav,.mp3,.flac,.ogg,audio/*">
+            <span class="hint">WAV, MP3, FLAC, OGG · ≥ 8 kHz · ≤ 25 MB</span>
+          </div>
+
+          <div id="tts-ref-pane-record" class="clone-pane" hidden>
+            <div class="rec-controls">
+              <button id="tts-clone-rec" class="rec-btn" type="button">🎤 Start recording</button>
+              <span id="tts-clone-rec-timer" class="rec-timer">00:00.0</span>
+            </div>
+            <div class="meter"><div id="tts-clone-rec-meter" class="meter-bar"></div></div>
+            <span class="hint">5–30 s of clean speech works best. Native mic rate (often 48 kHz) → encoded to 16-bit WAV on stop.</span>
+          </div>
+
+          <div id="tts-clone-rec-status" class="clone-status neutral">no audio selected</div>
+        </div>
+
+        <div class="clone-field">
+          <div style="display:flex; align-items:center; gap:8px">
+            <label class="small" style="flex:1">Reference text <span class="hint-inline">(optional)</span></label>
+            <button id="tts-clone-transcribe" class="secondary" type="button" disabled title="Run the recording through Whisper to auto-fill this field" style="padding:4px 10px; font-size:11px">🪄 Transcribe recording</button>
+          </div>
+          <input id="tts-clone-text" type="text" placeholder="transcript of the reference audio — improves clone quality">
+        </div>
+
+        <div class="clone-footer">
+          <label class="small" style="display:flex; align-items:center; gap:6px; margin:0">
+            <input id="tts-clone-overwrite" type="checkbox"> Overwrite if exists
+          </label>
+          <div style="flex:1"></div>
+          <button id="tts-clone-save">Save profile</button>
+        </div>
+        <div id="tts-clone-status" class="clone-status neutral"></div>
       </div>
 
       <label class="small">Output level</label>
@@ -432,7 +622,7 @@ async function playTTS(override) {
   const text = (typeof override === "string" ? override : $("#tts-text").value).trim();
   if (!text) return;
   if (typeof override === "string") $("#tts-text").value = override;
-  const voice = $("#tts-voice").value.trim() || "auto";
+  const voice = getSelectedVoice();
   const speed = parseFloat($("#tts-speed").value);
 
   ttsPlayBtn.disabled = true; ttsStopBtn.disabled = false;
@@ -574,7 +764,7 @@ async function processTTSQueue() {
 }
 
 async function synthSentence(text) {
-  const voice = $("#tts-voice").value.trim() || "auto";
+  const voice = getSelectedVoice();
   const speed = parseFloat($("#tts-speed").value);
   const t0 = performance.now();
   ttsPipeAbort = new AbortController();
@@ -693,6 +883,555 @@ function extractSentences(buf) {
 }
 
 ttsStopBtn.addEventListener("click", () => stopTTS("stop clicked"));
+
+// ── Voice selector / cloning profile management ───────────────────────────
+const voiceSelect = $("#tts-voice");
+const voiceReloadBtn = $("#tts-voices-reload");
+const voiceDeleteBtn = $("#tts-voice-delete");
+const cloneToggleBtn = $("#tts-clone-toggle");
+const cloneForm = $("#tts-clone-form");
+const cloneId = $("#tts-clone-id");
+const cloneFile = $("#tts-clone-file");
+const cloneText = $("#tts-clone-text");
+const cloneOverwrite = $("#tts-clone-overwrite");
+const cloneSaveBtn = $("#tts-clone-save");
+const cloneCancelBtn = $("#tts-clone-cancel");
+const cloneStatus = $("#tts-clone-status");
+
+function setCloneStatus(cls, msg) {
+  cloneStatus.className = "clone-status " + (cls || "neutral");
+  cloneStatus.textContent = msg;
+}
+
+function updateVoiceDeleteBtn() {
+  voiceDeleteBtn.disabled = !(voiceSelect.value || "").startsWith("clone:");
+}
+
+// Sentinel value for the "design (custom)" option — selecting it reveals an
+// attributes input. The real voice string sent to TTS is "design:<attrs>".
+const DESIGN_CUSTOM_VALUE = "__design_custom__";
+const designRow = $("#tts-design-row");
+const designAttrs = $("#tts-design-attrs");
+
+function updateDesignRow() {
+  designRow.style.display = voiceSelect.value === DESIGN_CUSTOM_VALUE ? "flex" : "none";
+  if (voiceSelect.value === DESIGN_CUSTOM_VALUE) designAttrs.focus();
+}
+
+// Compute the voice string actually sent to /v1/audio/speech.
+function getSelectedVoice() {
+  const v = voiceSelect.value;
+  if (v === DESIGN_CUSTOM_VALUE) {
+    const attrs = designAttrs.value.trim();
+    return attrs ? "design:" + attrs : "auto";
+  }
+  return v || "auto";
+}
+
+let designAttributesSpec = null; // populated from /v1/voices
+
+async function loadVoices(preferredValue) {
+  const keepValue = preferredValue || voiceSelect.value || "auto";
+  try {
+    const r = await fetch(baseUrl() + "/v1/voices", { headers: authHeaders() });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const j = await r.json();
+    const voices = j.voices || [];
+    designAttributesSpec = j.design_attributes || null;
+    renderDesignHelp();
+
+    // Discard the server's literal "design:<attributes>" placeholder — we use
+    // a sentinel option that reveals an attributes input field instead.
+    const builtins = voices.filter(v => v.type !== "clone" && v.id !== "design:<attributes>");
+    const clones = voices.filter(v => v.type === "clone");
+
+    voiceSelect.innerHTML = "";
+    const gBuiltin = document.createElement("optgroup");
+    gBuiltin.label = "Built-in";
+    for (const v of builtins) {
+      const o = document.createElement("option");
+      o.value = v.id;
+      o.textContent = v.id;
+      gBuiltin.appendChild(o);
+    }
+    // Our custom design-attribute option
+    const designOpt = document.createElement("option");
+    designOpt.value = DESIGN_CUSTOM_VALUE;
+    designOpt.textContent = "design (custom…)";
+    gBuiltin.appendChild(designOpt);
+    voiceSelect.appendChild(gBuiltin);
+
+    if (clones.length) {
+      const g = document.createElement("optgroup");
+      g.label = "Cloned profiles";
+      for (const v of clones) {
+        const o = document.createElement("option");
+        o.value = v.id;
+        o.textContent = v.id;
+        g.appendChild(o);
+      }
+      voiceSelect.appendChild(g);
+    }
+
+    // Restore selection if still present; else fall back to "auto"
+    const options = Array.from(voiceSelect.options).map(o => o.value);
+    voiceSelect.value = options.includes(keepValue) ? keepValue : (options[0] || "auto");
+    updateVoiceDeleteBtn();
+    updateDesignRow();
+  } catch (e) {
+    logTo(ttsLog, "err", "voice list load failed: " + e.message, ts(performance.now()));
+    // Ensure at least "auto" is selectable so TTS still works.
+    if (voiceSelect.options.length === 0) {
+      const o = document.createElement("option");
+      o.value = "auto"; o.textContent = "auto";
+      voiceSelect.appendChild(o);
+    }
+  }
+}
+
+voiceSelect.addEventListener("change", () => { updateVoiceDeleteBtn(); updateDesignRow(); });
+voiceReloadBtn.addEventListener("click", () => loadVoices());
+
+// ── Design attributes chip helper ─────────────────────────────────────────
+const designHelp = $("#tts-design-help");
+const designHelpToggle = $("#tts-design-help-toggle");
+const designCategoriesEl = $("#tts-design-categories");
+
+// Pretty labels for the JSON category keys returned by /v1/voices.
+const DESIGN_CAT_LABELS = {
+  gender: "Gender",
+  age: "Age",
+  pitch: "Pitch",
+  style: "Style",
+  accent_en: "English accents",
+  dialect_zh: "Chinese dialects",
+};
+
+function parseDesignAttrs(raw) {
+  return raw.split(",").map(s => s.trim()).filter(Boolean);
+}
+function joinDesignAttrs(list) {
+  return list.join(", ");
+}
+
+function togglePicked(category, value) {
+  const list = parseDesignAttrs(designAttrs.value);
+  const catValues = new Set((designAttributesSpec && designAttributesSpec[category]) || []);
+  const alreadyHas = list.includes(value);
+  // Remove any existing value from the same category (one-per-category rule)
+  const filtered = list.filter(a => !catValues.has(a));
+  if (!alreadyHas) filtered.push(value);
+  designAttrs.value = joinDesignAttrs(filtered);
+  highlightPickedChips();
+}
+
+function highlightPickedChips() {
+  const active = new Set(parseDesignAttrs(designAttrs.value));
+  designCategoriesEl.querySelectorAll(".design-chip").forEach(el => {
+    el.classList.toggle("picked", active.has(el.dataset.value));
+  });
+}
+
+function renderDesignHelp() {
+  designCategoriesEl.innerHTML = "";
+  if (!designAttributesSpec) return;
+  for (const [category, values] of Object.entries(designAttributesSpec)) {
+    if (!values || !values.length) continue;
+    const row = document.createElement("div");
+    row.className = "design-cat";
+    const label = document.createElement("span");
+    label.className = "design-cat-label";
+    label.textContent = DESIGN_CAT_LABELS[category] || category;
+    row.appendChild(label);
+    const chips = document.createElement("div");
+    chips.className = "design-chips";
+    for (const v of values) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "design-chip";
+      b.dataset.value = v;
+      b.textContent = v;
+      b.addEventListener("click", () => togglePicked(category, v));
+      chips.appendChild(b);
+    }
+    row.appendChild(chips);
+    designCategoriesEl.appendChild(row);
+  }
+  highlightPickedChips();
+}
+
+designHelpToggle.addEventListener("click", () => {
+  const hidden = designHelp.hasAttribute("hidden");
+  if (hidden) designHelp.removeAttribute("hidden");
+  else designHelp.setAttribute("hidden", "");
+  designHelpToggle.textContent = hidden ? "hide help" : "show help";
+});
+
+designAttrs.addEventListener("input", highlightPickedChips);
+
+const refTabUpload = $("#tts-ref-tab-upload");
+const refTabRecord = $("#tts-ref-tab-record");
+const refPaneUpload = $("#tts-ref-pane-upload");
+const refPaneRecord = $("#tts-ref-pane-record");
+const recTimerEl = $("#tts-clone-rec-timer");
+const recStatusEl = $("#tts-clone-rec-status");
+
+function setRecStatus(cls, msg) {
+  recStatusEl.className = "clone-status " + (cls || "neutral");
+  recStatusEl.textContent = msg;
+}
+
+function switchRefTab(which) {
+  const isUpload = which === "upload";
+  refTabUpload.classList.toggle("active", isUpload);
+  refTabRecord.classList.toggle("active", !isUpload);
+  refPaneUpload.hidden = !isUpload;
+  refPaneRecord.hidden = isUpload;
+}
+refTabUpload.addEventListener("click", () => switchRefTab("upload"));
+refTabRecord.addEventListener("click", () => switchRefTab("record"));
+
+function formatRecTimer(ms) {
+  const total = Math.max(0, ms);
+  const min = Math.floor(total / 60000);
+  const sec = Math.floor((total % 60000) / 1000);
+  const tenth = Math.floor((total % 1000) / 100);
+  return `${String(min).padStart(2, "0")}:${String(sec).padStart(2, "0")}.${tenth}`;
+}
+
+cloneToggleBtn.addEventListener("click", () => {
+  const open = cloneForm.classList.toggle("open");
+  if (open) {
+    cloneId.value = "";
+    cloneFile.value = "";
+    cloneText.value = "";
+    cloneOverwrite.checked = false;
+    recordedBlob = null;
+    switchRefTab("upload");
+    setCloneStatus("neutral", "");
+    setRecStatus("neutral", "no audio selected");
+    recTimerEl.textContent = "00:00.0";
+    cloneRecMeter.style.width = "0%";
+    cloneId.focus();
+  } else if (recCtx) {
+    // User collapsed the form while recording — tear down the mic.
+    stopRec();
+  }
+});
+cloneCancelBtn.addEventListener("click", () => {
+  cloneForm.classList.remove("open");
+  if (recCtx) stopRec();
+  setCloneStatus("neutral", "");
+});
+
+// ── In-browser voice recorder ─────────────────────────────────────────────
+// Captures raw Float32 PCM via WebAudio, encodes to 16-bit WAV on stop so the
+// server accepts it like any file upload (soundfile supports WAV/FLAC/OGG).
+const cloneRecBtn = $("#tts-clone-rec");
+const cloneRecStatus = $("#tts-clone-rec-status");
+const cloneRecMeter = $("#tts-clone-rec-meter");
+let recCtx = null, recSrc = null, recProc = null, recStream = null;
+let recBuf = []; // Float32Array[]
+let recRate = 48000;
+let recStartedAt = 0;
+let recRafId = null;
+let recordedBlob = null; // Blob of encoded WAV from the latest recording
+
+function encodeWAV(float32Chunks, sampleRate) {
+  // Flatten chunks
+  let total = 0;
+  for (const c of float32Chunks) total += c.length;
+  const samples = new Float32Array(total);
+  let off = 0;
+  for (const c of float32Chunks) { samples.set(c, off); off += c.length; }
+
+  const bytesPerSample = 2;
+  const buffer = new ArrayBuffer(44 + samples.length * bytesPerSample);
+  const view = new DataView(buffer);
+  const writeStr = (o, s) => { for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i)); };
+
+  // RIFF header
+  writeStr(0, "RIFF");
+  view.setUint32(4, 36 + samples.length * bytesPerSample, true);
+  writeStr(8, "WAVE");
+  // fmt chunk
+  writeStr(12, "fmt ");
+  view.setUint32(16, 16, true);            // fmt chunk size
+  view.setUint16(20, 1, true);             // PCM
+  view.setUint16(22, 1, true);             // mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * bytesPerSample, true);
+  view.setUint16(32, bytesPerSample, true);
+  view.setUint16(34, 16, true);            // 16-bit
+  // data chunk
+  writeStr(36, "data");
+  view.setUint32(40, samples.length * bytesPerSample, true);
+  let pos = 44;
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(pos, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+    pos += 2;
+  }
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+async function startRec() {
+  try {
+    recStream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: false, noiseSuppression: true, autoGainControl: false },
+    });
+  } catch (e) {
+    setRecStatus("err", "mic permission denied: " + e.message);
+    return;
+  }
+  recCtx = new (window.AudioContext || window.webkitAudioContext)();
+  recRate = recCtx.sampleRate;
+  recSrc = recCtx.createMediaStreamSource(recStream);
+  recProc = recCtx.createScriptProcessor(4096, 1, 1);
+  recBuf = [];
+  recStartedAt = performance.now();
+  recProc.onaudioprocess = (e) => {
+    const ch = e.inputBuffer.getChannelData(0);
+    const copy = new Float32Array(ch.length);
+    copy.set(ch);
+    recBuf.push(copy);
+    let peak = 0;
+    for (let i = 0; i < ch.length; i++) { const a = Math.abs(ch[i]); if (a > peak) peak = a; }
+    cloneRecMeter.style.width = (peak * 100).toFixed(0) + "%";
+  };
+  recSrc.connect(recProc);
+  recProc.connect(recCtx.destination);
+  cloneRecBtn.textContent = "Stop recording";
+  cloneRecBtn.classList.add("recording");
+  setRecStatus("info", `recording @ ${recRate} Hz`);
+  const tick = () => {
+    if (!recCtx) return;
+    recTimerEl.textContent = formatRecTimer(performance.now() - recStartedAt);
+    recRafId = requestAnimationFrame(tick);
+  };
+  tick();
+}
+
+function stopRec() {
+  try { recProc && recProc.disconnect(); } catch (_) {}
+  try { recSrc && recSrc.disconnect(); } catch (_) {}
+  try { recStream && recStream.getTracks().forEach(t => t.stop()); } catch (_) {}
+  if (recRafId) { cancelAnimationFrame(recRafId); recRafId = null; }
+
+  const rate = recRate || 48000;
+  const durSec = recBuf.reduce((n, c) => n + c.length, 0) / rate;
+  try {
+    recordedBlob = recBuf.length ? encodeWAV(recBuf, rate) : null;
+  } catch (e) {
+    setRecStatus("err", "encode failed: " + e.message);
+    recordedBlob = null;
+  }
+  try { recCtx && recCtx.close(); } catch (_) {}
+  recCtx = null; recSrc = null; recProc = null; recStream = null; recBuf = [];
+  cloneRecMeter.style.width = "0%";
+  cloneRecBtn.textContent = "🎤 Start recording";
+  cloneRecBtn.classList.remove("recording");
+  if (recordedBlob) {
+    setRecStatus("ok", `recorded ${durSec.toFixed(1)}s · ${(recordedBlob.size/1024).toFixed(0)} KB · 16-bit WAV ready`);
+    cloneFile.value = ""; // the recording wins over a previously-picked file
+  } else {
+    setRecStatus("neutral", "no audio captured");
+    recTimerEl.textContent = "00:00.0";
+  }
+  updateTranscribeBtn();
+}
+
+// ── Auto-transcribe a recording via the running Whisper endpoint ──────────
+const transcribeBtn = $("#tts-clone-transcribe");
+
+function updateTranscribeBtn() {
+  // Only enabled when we have an in-browser recording (a recorded Blob) — not
+  // when the user picked a file, since we'd have to re-encode it anyway.
+  transcribeBtn.disabled = !recordedBlob;
+}
+updateTranscribeBtn();
+
+async function decodeBlobToPcm16Mono16k(blob) {
+  const arrayBuf = await blob.arrayBuffer();
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  let decoded;
+  try {
+    decoded = await ctx.decodeAudioData(arrayBuf.slice(0));
+  } finally {
+    try { ctx.close(); } catch (_) {}
+  }
+  const src = decoded.getChannelData(0);
+  const inRate = decoded.sampleRate;
+  const targetRate = 16000;
+  const ratio = inRate / targetRate;
+  const outN = Math.floor(src.length / ratio);
+  const out = new Int16Array(outN);
+  for (let i = 0; i < outN; i++) {
+    const s = Math.floor(i * ratio);
+    const e = Math.floor((i + 1) * ratio);
+    let sum = 0, n = 0;
+    for (let j = s; j < e && j < src.length; j++) { sum += src[j]; n++; }
+    const v = n ? sum / n : 0;
+    out[i] = Math.max(-32768, Math.min(32767, Math.round(v * 32767)));
+  }
+  return out;
+}
+
+async function transcribeRecording() {
+  if (!recordedBlob) return;
+  transcribeBtn.disabled = true;
+  const oldLabel = transcribeBtn.textContent;
+  transcribeBtn.textContent = "transcribing…";
+  setRecStatus("info", "decoding recording → 16 kHz mono PCM");
+
+  let pcm16;
+  try {
+    pcm16 = await decodeBlobToPcm16Mono16k(recordedBlob);
+  } catch (e) {
+    setRecStatus("err", "decode failed: " + e.message);
+    transcribeBtn.textContent = oldLabel;
+    transcribeBtn.disabled = false;
+    return;
+  }
+
+  const url = wsUrl("/v1/audio/transcribe");
+  const ws = new WebSocket(url);
+  ws.binaryType = "arraybuffer";
+  let utterance = "";
+  let gotAny = false;
+
+  await new Promise((resolve) => {
+    ws.onopen = () => {
+      setRecStatus("info", `streaming ${(pcm16.byteLength / 1024).toFixed(0)} KB to Whisper…`);
+      // Send in 100 ms-ish chunks so server-side VAD sees steady input.
+      const chunkSamples = 1600;
+      for (let i = 0; i < pcm16.length; i += chunkSamples) {
+        const slice = pcm16.subarray(i, Math.min(i + chunkSamples, pcm16.length));
+        // Copy because subarray shares the buffer — WS.send is async.
+        ws.send(new Int16Array(slice).buffer);
+      }
+      ws.send(JSON.stringify({ type: "eof" }));
+    };
+    ws.onmessage = (ev) => {
+      if (typeof ev.data !== "string") return;
+      try {
+        const m = JSON.parse(ev.data);
+        if (m.error) { setRecStatus("err", "server: " + (m.error.message || m.error.code)); return; }
+        if (m.text) { utterance += m.text; gotAny = true; }
+      } catch (_) { /* non-JSON noise */ }
+    };
+    ws.onclose = () => resolve();
+    ws.onerror = () => resolve(); // still resolve; utterance may be partial
+  });
+
+  const text = utterance.trim();
+  if (text) {
+    cloneText.value = text;
+    setRecStatus("ok", `transcribed: "${text.length > 60 ? text.slice(0, 60) + "…" : text}"`);
+    logTo(ttsLog, "info", `ref audio transcribed: "${text}"`, ts(performance.now()));
+  } else if (gotAny) {
+    setRecStatus("warn", "transcription came back empty — type the ref text manually");
+  } else {
+    setRecStatus("err", "no transcript received — is the STT endpoint enabled?");
+  }
+  transcribeBtn.textContent = oldLabel;
+  transcribeBtn.disabled = !recordedBlob;
+}
+
+transcribeBtn.addEventListener("click", transcribeRecording);
+
+cloneRecBtn.addEventListener("click", () => {
+  if (recCtx) stopRec();
+  else startRec();
+});
+// If the user picks a file after recording, drop the recording.
+cloneFile.addEventListener("change", () => {
+  if (cloneFile.files[0]) {
+    recordedBlob = null;
+    const f = cloneFile.files[0];
+    setRecStatus("info", `file selected · ${f.name} · ${(f.size/1024/1024).toFixed(2)} MB`);
+  } else {
+    setRecStatus("neutral", "no audio selected");
+  }
+  updateTranscribeBtn();
+});
+
+cloneSaveBtn.addEventListener("click", async () => {
+  const id = cloneId.value.trim();
+  if (!/^[a-zA-Z0-9_-]{1,64}$/.test(id)) {
+    setCloneStatus("err", "profile id: letters, digits, _, - only (1–64 chars)");
+    return;
+  }
+
+  // Prefer the in-browser recording, fall back to the file input.
+  let blob, filename;
+  if (recordedBlob) {
+    blob = recordedBlob;
+    filename = `${id}.wav`;
+  } else if (cloneFile.files[0]) {
+    const file = cloneFile.files[0];
+    blob = file;
+    filename = file.name;
+  } else {
+    setCloneStatus("err", "record a sample or pick a file first");
+    return;
+  }
+
+  const fd = new FormData();
+  fd.append("profile_id", id);
+  fd.append("ref_audio", blob, filename);
+  if (cloneText.value.trim()) fd.append("ref_text", cloneText.value.trim());
+  fd.append("overwrite", cloneOverwrite.checked ? "true" : "false");
+
+  cloneSaveBtn.disabled = true;
+  setCloneStatus("info", `uploading ${filename} (${(blob.size/1024/1024).toFixed(2)} MB)…`);
+  try {
+    const r = await fetch(baseUrl() + "/v1/voices/profiles", {
+      method: "POST",
+      headers: authHeaders(), // no Content-Type — fetch sets the multipart boundary
+      body: fd,
+    });
+    const body = await r.text();
+    if (!r.ok) throw new Error(`HTTP ${r.status}: ${body.slice(0, 400)}`);
+    setCloneStatus("ok", `saved profile "${id}"`);
+    logTo(ttsLog, "info", `profile created: ${id}`, ts(performance.now()));
+    recordedBlob = null;
+    await loadVoices(`clone:${id}`);
+    setTimeout(() => { cloneForm.classList.remove("open"); }, 700);
+  } catch (e) {
+    setCloneStatus("err", e.message);
+    logTo(ttsLog, "err", "clone upload failed: " + e.message, ts(performance.now()));
+  } finally {
+    cloneSaveBtn.disabled = false;
+  }
+});
+
+voiceDeleteBtn.addEventListener("click", async () => {
+  const v = voiceSelect.value;
+  if (!v.startsWith("clone:")) return;
+  const id = v.slice("clone:".length);
+  if (!confirm(`Delete profile "${id}"? The audio file will be removed from disk.`)) return;
+  voiceDeleteBtn.disabled = true;
+  try {
+    const r = await fetch(baseUrl() + "/v1/voices/profiles/" + encodeURIComponent(id), {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
+    if (!r.ok && r.status !== 204) {
+      const body = await r.text();
+      throw new Error(`HTTP ${r.status}: ${body.slice(0, 200)}`);
+    }
+    logTo(ttsLog, "info", `profile deleted: ${id}`, ts(performance.now()));
+    await loadVoices("auto");
+  } catch (e) {
+    logTo(ttsLog, "err", "profile delete failed: " + e.message, ts(performance.now()));
+    voiceDeleteBtn.disabled = false;
+  }
+});
+
+// Initial population
+loadVoices();
+serverInput.addEventListener("change", () => loadVoices());
 
 // ═══════════════════════════════════════════════════════════════════════════
 // STT: capture mic, downsample to 16 kHz, stream to WebSocket
@@ -819,6 +1558,17 @@ function startMicPump(inputRate, targetRate, ratio) {
   const BARGE_PEAK_THRESHOLD = 0.08; // ~8% on the meter
   const BARGE_FRAMES = 2; // ~170 ms at 4096 samples on 48 kHz
 
+  // Silence watchdog: Silero VAD has a 0.35–0.50 hysteresis dead zone where
+  // ambient noise can keep it "triggered" forever, so is_final never fires.
+  // If we detect the mic has gone quiet for ~1.5s AND we've seen committed
+  // partials since the last final, send a {"type":"flush"} so the server
+  // calls session.finish() and emits the final transcript manually.
+  let quietFrames = 0;
+  let audibleSinceLastFlush = false;
+  const FLUSH_QUIET_THRESHOLD = 0.02; // below this peak counts as silence
+  const FLUSH_AUDIBLE_THRESHOLD = 0.05; // above this counts as "user spoke"
+  const FLUSH_AFTER_QUIET_FRAMES = 18; // ~1.5s at 4096 samples on 48 kHz
+
   sttProcessor.onaudioprocess = (e) => {
     const input = e.inputBuffer.getChannelData(0);
     sttWave.push(input);
@@ -848,9 +1598,32 @@ function startMicPump(inputRate, targetRate, ratio) {
         loudFrames = 0;
         bargeAlerted = false;
       }
+      // While TTS plays, the watchdog is suspended (user's own voice might be
+      // about to barge in; don't flush during playback).
+      quietFrames = 0;
     } else {
       loudFrames = 0;
       bargeAlerted = false;
+      // Silence watchdog: arm it only after we've heard the user speak (so we
+      // don't flush empty transcripts when the mic starts cold). Then count
+      // consecutive quiet frames and send a flush once we cross the threshold.
+      if (peakIn > FLUSH_AUDIBLE_THRESHOLD) {
+        audibleSinceLastFlush = true;
+        quietFrames = 0;
+      } else if (peakIn < FLUSH_QUIET_THRESHOLD) {
+        quietFrames++;
+        if (audibleSinceLastFlush && sttUtterance.length > 0 &&
+            quietFrames >= FLUSH_AFTER_QUIET_FRAMES &&
+            sttWs && sttWs.readyState === WebSocket.OPEN) {
+          sttWs.send(JSON.stringify({ type: "flush" }));
+          logTo(sttLog, "warn", `silence watchdog → flush (quiet ${quietFrames} frames, utterance="${sttUtterance.trim().slice(0,40)}")`, ts(sttT0));
+          audibleSinceLastFlush = false;
+          quietFrames = 0;
+        }
+      } else {
+        // Mid-band peak: neither clearly quiet nor clearly audible. Don't
+        // advance the silence counter.
+      }
     }
     // Simple decimation with averaging — poor man's anti-aliasing. Fine for speech.
     const combined = new Float32Array(carry.length + input.length);
@@ -978,6 +1751,9 @@ async function llmSend(override) {
         model: llmModel.value.trim(),
         messages,
         stream: true,
+        // Qwen 3 / DeepSeek-R1 / other reasoning models: ask Ollama not to emit
+        // chain-of-thought. Ignored by models that don't support it.
+        think: false,
       }),
     });
     if (!res.ok) {

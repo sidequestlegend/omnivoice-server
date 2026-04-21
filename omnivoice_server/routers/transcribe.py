@@ -150,7 +150,7 @@ async def _reader_loop(
             if "bytes" in msg and msg["bytes"] is not None:
                 session.insert_audio_chunk(msg["bytes"])
             elif "text" in msg and msg["text"] is not None:
-                await _handle_control(msg["text"], websocket, eof_event)
+                await _handle_control(msg["text"], websocket, session, eof_event)
                 if eof_event.is_set():
                     return
     except WebSocketDisconnect:
@@ -163,6 +163,7 @@ async def _reader_loop(
 async def _handle_control(
     raw: str,
     websocket: WebSocket,
+    session: STTSession,
     eof_event: asyncio.Event,
 ) -> None:
     try:
@@ -176,6 +177,18 @@ async def _handle_control(
     ctype = payload.get("type")
     if ctype == "eof":
         eof_event.set()
+    elif ctype == "flush":
+        # Client-driven utterance boundary — used as a watchdog when Silero VAD
+        # gets stuck in its 0.35–0.50 hysteresis band and never emits end-of-speech.
+        # Emits whatever transcript the model has buffered as is_final=True, then
+        # resets internal state so the session stays open for the next utterance.
+        try:
+            final = await session.finish()
+            if final is not None:
+                await _safe_send_update(websocket, final)
+        except Exception:
+            logger.exception("flush failed")
+            await _send_error(websocket, "flush_failed", "session flush raised")
     elif ctype == "reset":
         await _send_error(websocket, "unsupported", "reset is not implemented")
     else:
