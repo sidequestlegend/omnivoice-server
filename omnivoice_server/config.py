@@ -24,6 +24,7 @@ class Settings(BaseSettings):
         env_prefix="OMNIVOICE_",
         env_file=".env",
         env_file_encoding="utf-8",
+        extra="ignore",  # tolerate foreign env vars (HF_TOKEN, PATH, etc.)
     )
 
     # Server

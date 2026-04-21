@@ -347,7 +347,10 @@
         </div>
         <div class="col" style="flex:1">
           <label class="small">Model</label>
-          <input id="llm-model" type="text" value="qwen3.5">
+          <div style="display:flex; gap:6px">
+            <select id="llm-model" style="flex:1"></select>
+            <button id="llm-models-reload" class="secondary" title="Refresh installed models" style="padding:7px 10px">↻</button>
+          </div>
         </div>
       </div>
 
@@ -614,6 +617,42 @@ let ttsCtx = null;
 let ttsNextTime = 0;
 let ttsLastEndedAt = 0; // ctx time when the last scheduled chunk finishes
 
+// Convert the configured http(s) base URL to a ws(s):// URL for the TTS stream endpoint.
+function ttsStreamUrl() {
+  const u = new URL(baseUrl());
+  u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
+  u.pathname = "/v1/audio/speech/stream";
+  const k = keyInput.value.trim();
+  if (k) u.searchParams.set("token", k);
+  return u.toString();
+}
+
+// Feed raw PCM bytes from a binary WS frame into an AudioContext, scheduling at
+// the running nextStartTime so successive chunks/sentences play gap-free.
+function _feedPcmChunk(ctxSlot, bytes, sampleRate) {
+  const combined = new Uint8Array(ctxSlot.leftover.length + bytes.length);
+  combined.set(ctxSlot.leftover); combined.set(bytes, ctxSlot.leftover.length);
+  const evenLen = combined.length - (combined.length % 2);
+  const take = combined.subarray(0, evenLen);
+  ctxSlot.leftover = combined.subarray(evenLen);
+  if (take.length === 0) return { peak: 0, float32: null, duration: 0 };
+  const int16 = new Int16Array(take.buffer, take.byteOffset, take.length / 2);
+  const float32 = new Float32Array(int16.length);
+  let peak = 0;
+  for (let i = 0; i < int16.length; i++) {
+    const v = int16[i] / 32768; float32[i] = v;
+    const a = Math.abs(v); if (a > peak) peak = a;
+  }
+  const buf = ctxSlot.ctx.createBuffer(1, float32.length, sampleRate);
+  buf.copyToChannel(float32, 0);
+  const src = ctxSlot.ctx.createBufferSource();
+  src.buffer = buf; src.connect(ctxSlot.ctx.destination);
+  const startAt = Math.max(ctxSlot.nextTime, ctxSlot.ctx.currentTime);
+  src.start(startAt);
+  ctxSlot.nextTime = startAt + buf.duration;
+  return { peak, float32, duration: buf.duration };
+}
+
 async function playTTS(override) {
   ttsLog.innerHTML = "";
   $("#tts-ttfb").textContent = "—";
@@ -628,82 +667,74 @@ async function playTTS(override) {
   ttsPlayBtn.disabled = true; ttsStopBtn.disabled = false;
   ttsCtx = new (window.AudioContext || window.webkitAudioContext)();
   ttsNextTime = ttsCtx.currentTime;
-  ttsAbort = new AbortController();
+  const slot = { ctx: ttsCtx, nextTime: ttsNextTime, leftover: new Uint8Array(0) };
+
   const t0 = performance.now();
-  let firstByteAt = null, bytesIn = 0, chunkCount = 0, audioSeconds = 0;
+  let firstByteAt = null, firstSegmentAt = null, bytesIn = 0, chunkCount = 0, audioSeconds = 0, segmentCount = 0;
 
   logTo(ttsLog, "info", `request → ${voice} · speed ${speed}`, ts(t0));
 
-  try {
-    const res = await fetch(baseUrl() + "/v1/audio/speech", {
-      method: "POST",
-      signal: ttsAbort.signal,
-      headers: { "Content-Type": "application/json", ...authHeaders() },
-      body: JSON.stringify({
+  const url = ttsStreamUrl();
+  const ws = new WebSocket(url);
+  ws.binaryType = "arraybuffer";
+  ttsAbort = { abort: () => { try { ws.close(1000, "client stop"); } catch (_) {} } };
+
+  await new Promise((resolve) => {
+    ws.onopen = () => {
+      logTo(ttsLog, "info", `ws open`, ts(t0));
+      ws.send(JSON.stringify({
         model: "omnivoice", input: text, voice, speed,
         response_format: "pcm", stream: true,
-      }),
-    });
-    if (!res.ok) {
-      const body = await res.text();
-      logTo(ttsLog, "err", `HTTP ${res.status}: ${body.slice(0, 200)}`, ts(t0));
-      throw new Error(`HTTP ${res.status}`);
-    }
-    const sampleRate = parseInt(res.headers.get("X-Audio-Sample-Rate") || "24000", 10);
-    logTo(ttsLog, "info", `200 · ${sampleRate} Hz int16 LE`, ts(t0));
-
-    const reader = res.body.getReader();
-    let leftover = new Uint8Array(0);
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (firstByteAt === null) {
-        firstByteAt = performance.now();
-        $("#tts-ttfb").textContent = Math.round(firstByteAt - t0) + " ms";
+      }));
+    };
+    ws.onmessage = (ev) => {
+      if (ev.data instanceof ArrayBuffer) {
+        if (firstByteAt === null) {
+          firstByteAt = performance.now();
+          $("#tts-ttfb").textContent = Math.round(firstByteAt - t0) + " ms";
+        }
+        bytesIn += ev.data.byteLength;
+        chunkCount++;
+        const r = _feedPcmChunk(slot, new Uint8Array(ev.data), 24000);
+        if (r.float32) {
+          audioSeconds += r.duration;
+          ttsMeter.style.width = (r.peak * 100).toFixed(0) + "%";
+          ttsWave.push(r.float32);
+        }
+        ttsNextTime = slot.nextTime;
+        ttsLastEndedAt = ttsNextTime;
+        $("#tts-chunks").textContent = chunkCount;
+        $("#tts-duration").textContent = audioSeconds.toFixed(2) + "s";
+        return;
       }
-      bytesIn += value.length;
-      chunkCount++;
-      // Combine with leftover, drop trailing odd byte
-      const combined = new Uint8Array(leftover.length + value.length);
-      combined.set(leftover); combined.set(value, leftover.length);
-      const evenLen = combined.length - (combined.length % 2);
-      const take = combined.subarray(0, evenLen);
-      leftover = combined.subarray(evenLen);
-
-      const int16 = new Int16Array(take.buffer, take.byteOffset, take.length / 2);
-      const float32 = new Float32Array(int16.length);
-      let peak = 0;
-      for (let i = 0; i < int16.length; i++) {
-        const v = int16[i] / 32768;
-        float32[i] = v;
-        const a = Math.abs(v); if (a > peak) peak = a;
+      // Text frame (JSON control/metadata)
+      let msg;
+      try { msg = JSON.parse(ev.data); } catch { logTo(ttsLog, "warn", "non-JSON text: " + ev.data, ts(t0)); return; }
+      if (msg.type === "segment") {
+        segmentCount++;
+        if (firstSegmentAt === null) firstSegmentAt = performance.now();
+        const durStr = (msg.duration_s ?? msg.end_s - msg.start_s).toFixed(2);
+        const txt = (msg.text || "").trim();
+        logTo(ttsLog, "tts-chunk",
+          `segment #${msg.index} · ${msg.start_s.toFixed(2)}–${msg.end_s.toFixed(2)}s (${durStr}s) · "${txt.length > 60 ? txt.slice(0,60)+"…" : txt}"`,
+          ts(t0));
+      } else if (msg.type === "done") {
+        logTo(ttsLog, "info",
+          `done · ${msg.total_segments} segments · ${msg.total_duration_s}s audio · ${bytesIn} bytes received`,
+          ts(t0));
+      } else if (msg.type === "error") {
+        logTo(ttsLog, "err", `server: ${msg.code} — ${msg.message}`, ts(t0));
       }
-      // Schedule chunk
-      const buf = ttsCtx.createBuffer(1, float32.length, sampleRate);
-      buf.copyToChannel(float32, 0);
-      const src = ttsCtx.createBufferSource();
-      src.buffer = buf; src.connect(ttsCtx.destination);
-      const startAt = Math.max(ttsNextTime, ttsCtx.currentTime);
-      src.start(startAt);
-      ttsNextTime = startAt + buf.duration;
-      audioSeconds += buf.duration;
+    };
+    ws.onerror = () => { logTo(ttsLog, "err", "ws error", ts(t0)); };
+    ws.onclose = (ev) => {
+      if (ev.code !== 1000) logTo(ttsLog, "warn", `ws closed code=${ev.code} reason=${ev.reason || "—"}`, ts(t0));
+      resolve();
+    };
+  });
 
-      ttsMeter.style.width = (peak * 100).toFixed(0) + "%";
-      ttsWave.push(float32);
-      $("#tts-chunks").textContent = chunkCount;
-      $("#tts-duration").textContent = audioSeconds.toFixed(2) + "s";
-      ttsLastEndedAt = ttsNextTime;
-      logTo(ttsLog, "tts-chunk", `chunk #${chunkCount} · ${value.length}B · +${buf.duration.toFixed(2)}s`, ts(t0));
-    }
-    logTo(ttsLog, "info", `done · ${bytesIn} bytes · ${audioSeconds.toFixed(2)}s audio`, ts(t0));
-  } catch (e) {
-    if (e.name !== "AbortError") logTo(ttsLog, "err", String(e), ts(t0));
-    else logTo(ttsLog, "warn", "aborted", ts(t0));
-  } finally {
-    ttsPlayBtn.disabled = false; ttsStopBtn.disabled = true; ttsAbort = null;
-  }
-  // Wait until the last scheduled audio actually finishes playing through speakers.
+  ttsPlayBtn.disabled = false; ttsStopBtn.disabled = true; ttsAbort = null;
+
   if (ttsCtx) {
     const remaining = Math.max(0, ttsLastEndedAt - ttsCtx.currentTime);
     if (remaining > 0) await new Promise(r => setTimeout(r, remaining * 1000 + 80));
@@ -767,70 +798,65 @@ async function synthSentence(text) {
   const voice = getSelectedVoice();
   const speed = parseFloat($("#tts-speed").value);
   const t0 = performance.now();
-  ttsPipeAbort = new AbortController();
   logTo(ttsLog, "info", `→ synth "${text.slice(0, 60)}${text.length > 60 ? "…" : ""}"`, ts(t0));
-  try {
-    const res = await fetch(baseUrl() + "/v1/audio/speech", {
-      method: "POST",
-      signal: ttsPipeAbort.signal,
-      headers: { "Content-Type": "application/json", ...authHeaders() },
-      body: JSON.stringify({
+
+  const url = ttsStreamUrl();
+  const ws = new WebSocket(url);
+  ws.binaryType = "arraybuffer";
+  ttsPipeAbort = { abort: () => { try { ws.close(1000, "pipe stop"); } catch (_) {} } };
+
+  const ctx = pipeAudioCtx();
+  const slot = { ctx, nextTime: ttsPipeNextTime, leftover: new Uint8Array(0) };
+  let firstByte = null, bytes = 0, audioSec = 0;
+
+  await new Promise((resolve) => {
+    ws.onopen = () => {
+      ws.send(JSON.stringify({
         model: "omnivoice", input: text, voice, speed,
         response_format: "pcm", stream: true,
-      }),
-    });
-    if (!res.ok) {
-      const body = await res.text();
-      throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`);
-    }
-    const sampleRate = parseInt(res.headers.get("X-Audio-Sample-Rate") || "24000", 10);
-    const ctx = pipeAudioCtx();
-    const reader = res.body.getReader();
-    let leftover = new Uint8Array(0);
-    let firstByte = null, chunkCount = 0, bytes = 0, audioSec = 0;
+      }));
+    };
+    ws.onmessage = (ev) => {
+      if (ev.data instanceof ArrayBuffer) {
+        if (firstByte === null) {
+          firstByte = performance.now();
+          $("#tts-ttfb").textContent = Math.round(firstByte - t0) + " ms";
+          logTo(ttsLog, "info", `TTFB ${Math.round(firstByte - t0)}ms`, ts(t0));
+        }
+        bytes += ev.data.byteLength;
+        const r = _feedPcmChunk(slot, new Uint8Array(ev.data), 24000);
+        if (r.float32) {
+          audioSec += r.duration;
+          ttsMeter.style.width = (r.peak * 100).toFixed(0) + "%";
+          ttsWave.push(r.float32);
+        }
+        ttsPipeNextTime = slot.nextTime;
+        ttsPipeLastEndedAt = ttsPipeNextTime;
+        $("#tts-duration").textContent = audioSec.toFixed(2) + "s";
+        return;
+      }
+      let msg;
+      try { msg = JSON.parse(ev.data); } catch { return; }
+      if (msg.type === "segment") {
+        const durStr = (msg.duration_s ?? msg.end_s - msg.start_s).toFixed(2);
+        logTo(ttsLog, "tts-chunk",
+          `segment · ${msg.start_s.toFixed(2)}–${msg.end_s.toFixed(2)}s (${durStr}s)`,
+          ts(t0));
+      } else if (msg.type === "error") {
+        logTo(ttsLog, "err", `server: ${msg.code} — ${msg.message}`, ts(t0));
+      }
+    };
+    ws.onerror = () => { logTo(ttsLog, "err", "ws error", ts(t0)); };
+    ws.onclose = (ev) => {
+      if (ev.code !== 1000) logTo(ttsLog, "warn", `sentence ws closed code=${ev.code}`, ts(t0));
+      resolve();
+    };
+  });
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (firstByte === null) {
-        firstByte = performance.now();
-        $("#tts-ttfb").textContent = Math.round(firstByte - t0) + " ms";
-        logTo(ttsLog, "info", `TTFB ${Math.round(firstByte - t0)}ms`, ts(t0));
-      }
-      bytes += value.length; chunkCount++;
-      const combined = new Uint8Array(leftover.length + value.length);
-      combined.set(leftover); combined.set(value, leftover.length);
-      const evenLen = combined.length - (combined.length % 2);
-      const take = combined.subarray(0, evenLen);
-      leftover = combined.subarray(evenLen);
-      const int16 = new Int16Array(take.buffer, take.byteOffset, take.length / 2);
-      const float32 = new Float32Array(int16.length);
-      let peak = 0;
-      for (let i = 0; i < int16.length; i++) {
-        const v = int16[i] / 32768; float32[i] = v;
-        const a = Math.abs(v); if (a > peak) peak = a;
-      }
-      const buf = ctx.createBuffer(1, float32.length, sampleRate);
-      buf.copyToChannel(float32, 0);
-      const src = ctx.createBufferSource();
-      src.buffer = buf; src.connect(ctx.destination);
-      const startAt = Math.max(ttsPipeNextTime, ctx.currentTime);
-      src.start(startAt);
-      ttsPipeNextTime = startAt + buf.duration;
-      ttsPipeLastEndedAt = ttsPipeNextTime;
-      audioSec += buf.duration;
-      ttsMeter.style.width = (peak * 100).toFixed(0) + "%";
-      ttsWave.push(float32);
-      $("#tts-chunks").textContent = chunkCount;
-      $("#tts-duration").textContent = audioSec.toFixed(2) + "s";
-    }
-    logTo(ttsLog, "tts-chunk", `"${text.slice(0, 30)}${text.length > 30 ? "…" : ""}" · ${bytes}B · ${audioSec.toFixed(2)}s`, ts(t0));
-  } catch (e) {
-    if (e.name === "AbortError") logTo(ttsLog, "warn", "sentence aborted", ts(t0));
-    else logTo(ttsLog, "err", String(e.message || e), ts(t0));
-  } finally {
-    ttsPipeAbort = null;
-  }
+  logTo(ttsLog, "tts-chunk",
+    `done · "${text.slice(0, 30)}${text.length > 30 ? "…" : ""}" · ${bytes}B · ${audioSec.toFixed(2)}s`,
+    ts(t0));
+  ttsPipeAbort = null;
 }
 
 function stopTTS(reason) {
@@ -1848,6 +1874,65 @@ llmInput.addEventListener("keydown", (e) => {
     if (!llmSendBtn.disabled) llmSend();
   }
 });
+
+// ── Ollama model list ─────────────────────────────────────────────────────
+const llmModelsReloadBtn = $("#llm-models-reload");
+
+function formatModelSize(bytes) {
+  if (!bytes) return "";
+  const gb = bytes / (1024 ** 3);
+  return gb >= 1 ? `${gb.toFixed(1)} GB` : `${(bytes / (1024 ** 2)).toFixed(0)} MB`;
+}
+
+async function loadLlmModels(preferredValue) {
+  const url = llmUrl.value.replace(/\/$/, "") + "/api/tags";
+  const keep = preferredValue ?? llmModel.value ?? "qwen3.5:latest";
+  try {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const j = await r.json();
+    const models = (j.models || []).slice().sort((a, b) => a.name.localeCompare(b.name));
+
+    llmModel.innerHTML = "";
+    if (!models.length) {
+      const o = document.createElement("option");
+      o.value = ""; o.textContent = "(no models installed — run: ollama pull <name>)";
+      o.disabled = true;
+      llmModel.appendChild(o);
+      logTo(llmLog, "warn", "Ollama has no models installed", ts(performance.now()));
+      return;
+    }
+    for (const m of models) {
+      const o = document.createElement("option");
+      o.value = m.name;
+      const size = formatModelSize(m.size);
+      o.textContent = size ? `${m.name}  ·  ${size}` : m.name;
+      // Tooltip with the fuller metadata
+      const parts = [m.details?.parameter_size, m.details?.quantization_level, m.details?.family].filter(Boolean);
+      if (parts.length) o.title = parts.join(" · ");
+      llmModel.appendChild(o);
+    }
+    // Restore previous / preferred selection if it still exists, else first model
+    const names = models.map(m => m.name);
+    if (names.includes(keep)) llmModel.value = keep;
+    else {
+      // Prefer any qwen3.5* variant as default, then first model
+      const qwen = names.find(n => n.startsWith("qwen3.5"));
+      llmModel.value = qwen || names[0];
+    }
+  } catch (e) {
+    logTo(llmLog, "err", `model list fetch failed (${url}): ${e.message}`, ts(performance.now()));
+    if (!llmModel.options.length) {
+      const o = document.createElement("option");
+      o.value = "qwen3.5:latest"; o.textContent = "qwen3.5:latest (unreachable — check Ollama URL)";
+      llmModel.appendChild(o);
+    }
+  }
+}
+
+llmModelsReloadBtn.addEventListener("click", () => loadLlmModels());
+llmUrl.addEventListener("change", () => loadLlmModels());
+loadLlmModels();
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Pipeline mode: STT final → LLM → TTS, with mic barge-in to interrupt TTS/LLM

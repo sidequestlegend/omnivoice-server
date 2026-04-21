@@ -27,10 +27,45 @@ _FALSE_ENDS = re.compile(
 )
 
 
+def split_to_sentences(text: str) -> list[str]:
+    """
+    Return one sentence per element, with false-boundary merging but no size-
+    based joining. Useful when every sentence needs its own synthesis call
+    (e.g., for per-sentence timestamps emitted via WebSocket).
+    """
+    if not text or not text.strip():
+        return []
+    text = text.strip()
+
+    raw_sentences = _SENTENCE_END.split(text)
+    raw_sentences = [s.strip() for s in raw_sentences if s.strip()]
+    if not raw_sentences:
+        return [text]
+
+    merged: list[str] = []
+    i = 0
+    while i < len(raw_sentences):
+        current = raw_sentences[i]
+        while i + 1 < len(raw_sentences):
+            match = None
+            for m in _FALSE_ENDS.finditer(current):
+                match = m
+            if match and match.end() >= len(current) - 2:
+                current = current + " " + raw_sentences[i + 1]
+                i += 1
+            else:
+                break
+        merged.append(current)
+        i += 1
+
+    return [s for s in merged if s.strip()]
+
+
 def split_sentences(text: str, max_chars: int = 400) -> list[str]:
     """
     Split text into sentence-level chunks suitable for streaming.
     Avoids splitting at false sentence boundaries (decimals, abbreviations, URLs).
+    Greedily packs consecutive sentences together up to max_chars.
     """
     if not text or not text.strip():
         return []

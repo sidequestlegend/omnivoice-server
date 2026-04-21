@@ -6,14 +6,27 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import tempfile
 from collections.abc import AsyncIterator
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
 from fastapi.responses import Response, StreamingResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
+from starlette.websockets import WebSocketState
 
 from ..services.inference import InferenceService, SynthesisRequest
 from ..services.metrics import MetricsService
@@ -28,7 +41,7 @@ from ..utils.instruction_validation import (
     InstructionValidationError,
     validate_and_canonicalize_instructions,
 )
-from ..utils.text import split_sentences
+from ..utils.text import split_sentences, split_to_sentences
 from ..voice_presets import (
     DEFAULT_DESIGN_INSTRUCTIONS,
     get_openai_voice_preset,
@@ -511,3 +524,188 @@ async def create_speech_clone(
                 "X-Synthesis-Latency-S": str(round(result.latency_s, 3)),
             },
         )
+
+
+# ── WS /v1/audio/speech/stream — streaming TTS with per-sentence markers ─────
+# Binary frames carry raw PCM int16 LE at 24 kHz mono. Text frames carry JSON:
+#   {"type":"segment","index":N,"start_s":F,"end_s":F,"text":"…"}  ← emitted
+#       once per sentence immediately before its audio bytes so clients can
+#       display the text while the audio plays.
+#   {"type":"done","total_duration_s":F,"total_segments":N}         ← last
+#   {"type":"error","code":"…","message":"…"}                       ← on failure
+#
+# The client opens the socket, sends ONE text frame whose body is JSON matching
+# SpeechRequest, then receives the interleaved stream until close(1000).
+
+_SAMPLE_RATE = 24_000
+
+
+def _ws_extract_bearer(websocket: WebSocket) -> str | None:
+    token = websocket.query_params.get("token")
+    if token:
+        return token
+    proto = websocket.headers.get("sec-websocket-protocol", "")
+    for part in proto.split(","):
+        part = part.strip()
+        if part.startswith("bearer."):
+            return part[len("bearer."):]
+    return None
+
+
+@router.websocket("/audio/speech/stream")
+async def speech_stream_ws(websocket: WebSocket) -> None:
+    app = websocket.app
+    cfg = app.state.cfg
+
+    # Auth — WebSocket upgrades bypass the HTTP auth middleware, so duplicate here.
+    if cfg.api_key:
+        token = _ws_extract_bearer(websocket)
+        if token != cfg.api_key:
+            await websocket.close(code=1008, reason="auth required")
+            return
+
+    inference_svc: InferenceService = app.state.inference_svc
+    profile_svc: ProfileService = app.state.profile_svc
+    metrics_svc: MetricsService = app.state.metrics_svc
+
+    await websocket.accept()
+
+    # Receive the request JSON as the first (and only inbound) text frame.
+    try:
+        raw = await websocket.receive_text()
+        payload = json.loads(raw)
+        body = SpeechRequest(**payload)
+    except (json.JSONDecodeError, ValidationError, TypeError, KeyError) as exc:
+        await _ws_send_error(websocket, "validation_error", str(exc))
+        await websocket.close(code=1003)
+        return
+    except WebSocketDisconnect:
+        return
+    except Exception as exc:
+        logger.exception("speech_stream_ws request parse failed")
+        await _ws_send_error(websocket, "bad_request", str(exc))
+        await websocket.close(code=1002)
+        return
+
+    try:
+        mode, instruct, ref_audio_path, ref_text = _resolve_synthesis_mode(body, profile_svc)
+    except HTTPException as exc:
+        await _ws_send_error(websocket, _status_code_str(exc.status_code), str(exc.detail))
+        await websocket.close(code=1008 if exc.status_code in (401, 403) else 1002)
+        return
+
+    # One sentence per segment for accurate timing (no greedy grouping).
+    sentences = split_to_sentences(body.input)
+    if not sentences:
+        await _ws_send_error(websocket, "empty_input", "No sentences to synthesise")
+        await websocket.close(code=1002)
+        return
+
+    timeout_s = body.request_timeout_s or cfg.request_timeout_s
+    accum_s = 0.0
+    total_segments = 0
+
+    try:
+        for i, sentence in enumerate(sentences):
+            req = SynthesisRequest(
+                text=sentence,
+                mode=mode,
+                instruct=instruct,
+                ref_audio_path=ref_audio_path,
+                ref_text=ref_text,
+                speed=body.speed,
+                num_step=body.num_step,
+                guidance_scale=body.guidance_scale,
+                denoise=body.denoise,
+                t_shift=body.t_shift,
+                position_temperature=body.position_temperature,
+                class_temperature=body.class_temperature,
+                duration=body.duration,
+                language=body.language,
+                layer_penalty_factor=body.layer_penalty_factor,
+                preprocess_prompt=body.preprocess_prompt,
+                postprocess_output=body.postprocess_output,
+                audio_chunk_duration=body.audio_chunk_duration,
+                audio_chunk_threshold=body.audio_chunk_threshold,
+            )
+            try:
+                result = await inference_svc.synthesize(req, timeout_override=timeout_s)
+                metrics_svc.record_success(result.latency_s)
+            except asyncio.TimeoutError:
+                metrics_svc.record_timeout()
+                await _ws_send_error(
+                    websocket,
+                    "timeout",
+                    f"Synthesis timed out after {timeout_s}s",
+                )
+                break
+            except Exception as exc:
+                metrics_svc.record_error()
+                logger.exception("ws sentence synthesis failed")
+                await _ws_send_error(websocket, "inference_failed", str(exc))
+                break
+
+            sentence_samples = sum(t.shape[-1] for t in result.tensors)
+            duration_s = sentence_samples / _SAMPLE_RATE
+            start_s = accum_s
+            end_s = accum_s + duration_s
+            accum_s = end_s
+
+            await websocket.send_json(
+                {
+                    "type": "segment",
+                    "index": i,
+                    "start_s": round(start_s, 3),
+                    "end_s": round(end_s, 3),
+                    "duration_s": round(duration_s, 3),
+                    "text": sentence,
+                }
+            )
+            for tensor in result.tensors:
+                if websocket.application_state != WebSocketState.CONNECTED:
+                    return
+                await websocket.send_bytes(tensor_to_pcm16_bytes(tensor))
+            total_segments += 1
+
+        if websocket.application_state == WebSocketState.CONNECTED:
+            await websocket.send_json(
+                {
+                    "type": "done",
+                    "total_segments": total_segments,
+                    "total_duration_s": round(accum_s, 3),
+                    "sample_rate": _SAMPLE_RATE,
+                    "channels": 1,
+                    "bit_depth": 16,
+                }
+            )
+    except WebSocketDisconnect:
+        return
+    finally:
+        if websocket.application_state != WebSocketState.DISCONNECTED:
+            try:
+                await websocket.close(code=1000)
+            except Exception:
+                pass
+
+
+async def _ws_send_error(websocket: WebSocket, code: str, message: str) -> None:
+    if websocket.application_state != WebSocketState.CONNECTED:
+        return
+    try:
+        await websocket.send_json({"type": "error", "code": code, "message": message})
+    except Exception:
+        logger.debug("ws error send failed", exc_info=True)
+
+
+def _status_code_str(status_code: int) -> str:
+    return {
+        400: "bad_request",
+        401: "unauthorized",
+        403: "forbidden",
+        404: "not_found",
+        413: "payload_too_large",
+        422: "validation_error",
+        500: "inference_failed",
+        503: "model_not_ready",
+        504: "timeout",
+    }.get(status_code, f"http_{status_code}")
