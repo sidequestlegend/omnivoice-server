@@ -5,17 +5,33 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.cuda
+      # Flip to TORCH_CHANNEL=nightly to pick up the latest Blackwell (sm_120)
+      # kernels if the RTX 5090 throws CUDA errors on stable torch 2.8+cu128.
+      # args:
+      #   TORCH_CHANNEL: nightly
     container_name: omnivoice-server
     ports:
       - "8880:8880"
     volumes:
-      # Persist voice profiles
+      # Persist voice profiles between local container restarts. Note: on Salad
+      # there are no persistent volumes — cloned profiles vanish on restart.
       - ./profiles:/home/ubuntu/app/profiles
-      - ./:/home/ubuntu/.cache/huggingface # persist HF cache for offline use
+      # Persist all model caches across builds/recreates so weights only download once.
+      # OmniVoice uses HF hub, Silero VAD uses torch.hub, and openai-whisper (under
+      # SimulStreaming) uses its own ~/.cache/whisper path for .pt files.
+      - ./.hf-cache:/home/ubuntu/.cache/huggingface
+      - ./.torch-cache:/home/ubuntu/.cache/torch
+      - ./.whisper-cache:/home/ubuntu/.cache/whisper
+    env_file:
+      # Local-only secrets and tokens (gitignored + dockerignored).
+      # Put HF_TOKEN=<your_hf_token> and any other secrets here.
+      # Safe if the file is missing — docker-compose only errors when required=true.
+      - path: .env
+        required: false
     environment:
       # Server configuration
       - OMNIVOICE_HOST=0.0.0.0
-      - OMNIVOICE_PORT=6020
+      - OMNIVOICE_PORT=8880
       - OMNIVOICE_DEVICE=cuda
       - OMNIVOICE_NUM_STEP=32
       - OMNIVOICE_MAX_CONCURRENT=2
@@ -25,9 +41,21 @@ services:
       # Optional: Adjust inference quality
       # - OMNIVOICE_GUIDANCE_SCALE=2.0
       # - OMNIVOICE_DENOISE=true
+      # ── STT (Whisper via SimulStreaming) ──
+      # OMNIVOICE_STT_MODEL_PATH defaults to "large-v3" in config.py. Override via .env
+      # to point at a volume-mounted .pt file for persistence across recreates.
+      - OMNIVOICE_STT_ENABLED=true
+      - OMNIVOICE_STT_LANGUAGE=en
+      - OMNIVOICE_STT_TASK=transcribe
+      - OMNIVOICE_STT_BEAMS=1
+      - OMNIVOICE_STT_MIN_CHUNK_SIZE=0.5
+      - OMNIVOICE_STT_VAD=true
+      - OMNIVOICE_STT_MAX_CONCURRENT=1
       # Optional: Logging
       - OMNIVOICE_LOG_LEVEL=info
     restart: unless-stopped
+    # VRAM floor with both models loaded: OmniVoice ~2 GB + Whisper large-v3 ~3 GB ≈ 6 GB.
+    # Set OMNIVOICE_STT_MODEL_PATH=small (or OMNIVOICE_STT_ENABLED=false) on <=6 GB cards.
     deploy:
       resources:
         reservations:
@@ -40,4 +68,4 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      start_period: 180s

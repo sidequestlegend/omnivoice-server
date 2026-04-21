@@ -1,0 +1,914 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OmniVoice Studio</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #181b22;
+    --panel-2: #1f232c;
+    --border: #2a2f3a;
+    --text: #e6e8ef;
+    --muted: #8a93a3;
+    --accent: #6ea8ff;
+    --accent-2: #7ae2c3;
+    --warn: #ffb547;
+    --err: #ff6b6b;
+    --ok: #56d68a;
+    --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: -apple-system, system-ui, "Segoe UI", Inter, sans-serif;
+    background: var(--bg); color: var(--text); font-size: 14px;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 20px; background: var(--panel); border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+  header h1 { font-size: 15px; margin: 0; letter-spacing: .5px; color: var(--accent); flex: 0 0 auto; }
+  header .spacer { flex: 1; }
+  header label { color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 6px; }
+  header input { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); padding: 5px 8px; border-radius: 6px; font-family: var(--mono); font-size: 12px; }
+  header input[type="text"] { width: 260px; }
+  header input[type="password"] { width: 180px; }
+  header .pill {
+    padding: 4px 10px; border-radius: 999px; font-size: 11px;
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--muted);
+    font-family: var(--mono);
+  }
+  header .pill.ok { color: var(--ok); border-color: #2e5a44; background: #10251b; }
+  header .pill.err { color: var(--err); border-color: #5a2e2e; background: #251010; }
+  header .pill.warn { color: var(--warn); border-color: #5a4a2e; background: #252010; }
+
+  /* Pipeline mode toggle */
+  .switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; color: var(--muted); font-size: 12px; }
+  .switch input { display: none; }
+  .switch .track {
+    width: 34px; height: 18px; background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 999px; position: relative; transition: background .15s, border-color .15s;
+  }
+  .switch .track::after {
+    content: ""; position: absolute; top: 1px; left: 1px; width: 14px; height: 14px;
+    border-radius: 50%; background: var(--muted); transition: transform .15s, background .15s;
+  }
+  .switch input:checked + .track { background: #10251b; border-color: #2e5a44; }
+  .switch input:checked + .track::after { transform: translateX(16px); background: var(--ok); }
+  .switch input:checked ~ .label { color: var(--ok); }
+
+  body.pipeline-on .panel { border-color: #2e5a44; box-shadow: 0 0 0 1px #1a3d2a inset; }
+  .pipeline-stage {
+    display: none; padding: 3px 8px; border-radius: 4px; font-size: 10px; font-family: var(--mono);
+    letter-spacing: 1px; background: var(--panel-2); color: var(--muted); border: 1px solid var(--border);
+  }
+  body.pipeline-on .pipeline-stage { display: inline-block; }
+  .pipeline-stage.active { color: var(--ok); background: #10251b; border-color: #2e5a44; }
+
+  main {
+    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px;
+    padding: 14px; height: calc(100vh - 53px);
+  }
+  @media (max-width: 1280px) { main { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 860px) { main { grid-template-columns: 1fr; height: auto; } }
+
+  .panel {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .panel-head { padding: 12px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; }
+  .panel-head h2 { margin: 0; font-size: 14px; letter-spacing: .5px; }
+  .panel-head .badge { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .panel-body { padding: 12px 16px; display: flex; flex-direction: column; gap: 10px; overflow: auto; }
+
+  .row { display: flex; gap: 10px; align-items: center; }
+  .col { display: flex; flex-direction: column; gap: 6px; }
+  label.small { font-size: 11px; color: var(--muted); }
+  textarea, select, input[type="text"], input[type="number"] {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    padding: 8px 10px; border-radius: 6px; font-size: 13px; width: 100%; font-family: inherit;
+  }
+  textarea { resize: vertical; min-height: 80px; font-family: inherit; }
+  input[type="range"] { width: 200px; }
+
+  button {
+    background: var(--accent); color: #0a1020; border: none; padding: 7px 14px;
+    border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 13px;
+    transition: background .15s, transform .05s;
+  }
+  button:hover:not(:disabled) { filter: brightness(1.1); }
+  button:active { transform: translateY(1px); }
+  button:disabled { background: var(--panel-2); color: var(--muted); cursor: not-allowed; }
+  button.secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+  button.danger { background: var(--err); color: #fff; }
+
+  .meter {
+    position: relative; height: 6px; background: var(--panel-2); border-radius: 3px; overflow: hidden;
+  }
+  .meter-bar {
+    position: absolute; top: 0; left: 0; bottom: 0; background: linear-gradient(90deg, var(--accent-2), var(--accent));
+    width: 0%; transition: width .08s linear;
+  }
+
+  .log {
+    flex: 1; background: #0a0d13; border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px 10px; font-family: var(--mono); font-size: 12px; line-height: 1.5;
+    overflow-y: auto; min-height: 160px; max-height: 360px;
+  }
+  .log .ev { display: flex; gap: 10px; padding: 2px 0; border-bottom: 1px solid rgba(255,255,255,.03); }
+  .log .ts { color: var(--muted); flex: 0 0 70px; text-align: right; }
+  .log .msg { color: var(--text); word-break: break-word; }
+  .log .info .msg { color: var(--accent); }
+  .log .partial .msg { color: var(--muted); font-style: italic; }
+  .log .final .msg { color: var(--ok); font-weight: 600; }
+  .log .tts-chunk .msg { color: var(--accent-2); }
+  .log .err .msg { color: var(--err); }
+  .log .warn .msg { color: var(--warn); }
+
+  canvas { width: 100%; height: 60px; background: #0a0d13; border: 1px solid var(--border); border-radius: 6px; display: block; }
+
+  .transcript {
+    background: #0a0d13; border: 1px solid var(--border); border-radius: 6px;
+    padding: 12px 14px; min-height: 80px; font-size: 14px; line-height: 1.5;
+  }
+  .transcript .p { color: var(--muted); font-style: italic; }
+  .transcript .f { color: var(--text); }
+  .transcript .cursor::after { content: "▏"; color: var(--accent); animation: blink 1s infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; font-family: var(--mono); font-size: 11px; }
+  .stat { background: var(--panel-2); padding: 6px 10px; border-radius: 6px; }
+  .stat .k { color: var(--muted); }
+  .stat .v { color: var(--text); font-weight: 600; }
+
+  /* ── LLM chat ─────────────────────────────────────────────────────────── */
+  .chat {
+    flex: 1; background: #0a0d13; border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px; min-height: 240px; max-height: 480px; overflow-y: auto;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .chat .turn {
+    padding: 8px 12px; border-radius: 8px; line-height: 1.45;
+    white-space: pre-wrap; word-break: break-word; font-size: 13px;
+  }
+  .chat .turn.user {
+    background: #172338; border: 1px solid #2a3e6a;
+    color: #cfe0ff; align-self: flex-end; max-width: 85%;
+  }
+  .chat .turn.assistant {
+    background: var(--panel-2); border: 1px solid var(--border);
+    color: var(--text); align-self: flex-start; max-width: 95%;
+  }
+  .chat .turn.assistant .role { color: var(--accent-2); font-size: 10px; font-family: var(--mono); letter-spacing: 1px; display: block; margin-bottom: 3px; }
+  .chat .turn.user .role { color: var(--accent); font-size: 10px; font-family: var(--mono); letter-spacing: 1px; display: block; margin-bottom: 3px; }
+  .chat .turn.assistant.streaming::after { content: "▏"; color: var(--accent); animation: blink 1s infinite; }
+  .chat .system-note { color: var(--muted); font-size: 11px; text-align: center; font-style: italic; padding: 4px; }
+
+  .input-bar { display: flex; gap: 8px; }
+  .input-bar textarea { flex: 1; min-height: 56px; max-height: 160px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>OmniVoice Studio</h1>
+  <label>Server <input id="server-url" type="text" value="http://localhost:8880"></label>
+  <label>API key <input id="api-key" type="password" placeholder="optional"></label>
+  <button id="health-btn" class="secondary">Health</button>
+  <span id="health-pill" class="pill">idle</span>
+  <div class="spacer"></div>
+  <label class="switch">
+    <input id="pipeline-toggle" type="checkbox">
+    <span class="track"></span>
+    <span class="label">🔗 Pipeline: STT → LLM → TTS</span>
+  </label>
+  <span id="gpu-pill" class="pill">GPU: —</span>
+</header>
+
+<main>
+
+  <!-- ── STT (left) ──────────────────────────────────────────────────────── -->
+  <section class="panel">
+    <div class="panel-head">
+      <h2>STT</h2>
+      <span class="badge">WS /v1/audio/transcribe · PCM 16-bit 16 kHz mono</span>
+      <span id="stt-stage" class="pipeline-stage">1 · LISTEN</span>
+    </div>
+    <div class="panel-body">
+      <div class="row">
+        <div class="col" style="flex:1">
+          <label class="small">Status</label>
+          <span id="stt-status" class="pill">idle</span>
+        </div>
+        <div class="col" style="justify-content:flex-end">
+          <button id="stt-start">🎤 Start</button>
+        </div>
+        <div class="col" style="justify-content:flex-end">
+          <button id="stt-stop" class="danger" disabled>Stop</button>
+        </div>
+      </div>
+
+      <label class="small">Mic input level</label>
+      <div class="meter"><div id="stt-meter" class="meter-bar"></div></div>
+      <canvas id="stt-wave" width="800" height="60"></canvas>
+
+      <div class="stats">
+        <div class="stat"><div class="k">Sent</div><div class="v" id="stt-sent">0 KB</div></div>
+        <div class="stat"><div class="k">Partials</div><div class="v" id="stt-partials">0</div></div>
+        <div class="stat"><div class="k">Finals</div><div class="v" id="stt-finals">0</div></div>
+      </div>
+
+      <label class="small">Live transcript</label>
+      <div id="stt-transcript" class="transcript"></div>
+
+      <label class="small">Event log</label>
+      <div id="stt-log" class="log"></div>
+    </div>
+  </section>
+
+  <!-- ── LLM (middle) ────────────────────────────────────────────────────── -->
+  <section class="panel">
+    <div class="panel-head">
+      <h2>LLM</h2>
+      <span class="badge">Ollama · /api/chat · streaming NDJSON</span>
+      <span id="llm-stage" class="pipeline-stage">2 · THINK</span>
+    </div>
+    <div class="panel-body">
+      <div class="row">
+        <div class="col" style="flex:1">
+          <label class="small">Ollama URL</label>
+          <input id="llm-url" type="text" value="http://localhost:11434">
+        </div>
+        <div class="col" style="flex:1">
+          <label class="small">Model</label>
+          <input id="llm-model" type="text" value="gemma4">
+        </div>
+      </div>
+
+      <label class="small">System prompt (optional)</label>
+      <textarea id="llm-system" rows="2" style="min-height:44px">You are a concise assistant.</textarea>
+
+      <label class="small">Conversation</label>
+      <div id="llm-chat" class="chat"></div>
+
+      <label class="small">Message</label>
+      <div class="input-bar">
+        <textarea id="llm-input" placeholder="Type a message and press Enter (Shift+Enter for newline)"></textarea>
+        <div class="col" style="gap:6px; width: 92px">
+          <button id="llm-send">Send</button>
+          <button id="llm-stop" class="danger" disabled>Stop</button>
+          <button id="llm-clear" class="secondary">Clear</button>
+        </div>
+      </div>
+
+      <div class="stats">
+        <div class="stat"><div class="k">TTFT</div><div class="v" id="llm-ttft">—</div></div>
+        <div class="stat"><div class="k">Tokens</div><div class="v" id="llm-tokens">0</div></div>
+        <div class="stat"><div class="k">tok/s</div><div class="v" id="llm-tps">—</div></div>
+      </div>
+
+      <label class="small">Event log</label>
+      <div id="llm-log" class="log"></div>
+    </div>
+  </section>
+
+  <!-- ── TTS (right) ─────────────────────────────────────────────────────── -->
+  <section class="panel">
+    <div class="panel-head">
+      <h2>TTS</h2>
+      <span class="badge">POST /v1/audio/speech · streaming PCM</span>
+      <span id="tts-stage" class="pipeline-stage">3 · SPEAK</span>
+    </div>
+    <div class="panel-body">
+      <div class="col">
+        <label class="small">Text</label>
+        <textarea id="tts-text">Hello from the OmniVoice web studio. This is a streaming synthesis test running on a local Docker container powered by the R T X 5090.</textarea>
+      </div>
+      <div class="row">
+        <div class="col" style="flex:1">
+          <label class="small">Voice</label>
+          <input id="tts-voice" type="text" value="auto">
+        </div>
+        <div class="col">
+          <label class="small">Speed <span id="tts-speed-v">1.0</span>x</label>
+          <input id="tts-speed" type="range" min="0.5" max="2" step="0.05" value="1.0">
+        </div>
+        <div class="col" style="justify-content:flex-end">
+          <button id="tts-play">▶ Stream</button>
+        </div>
+        <div class="col" style="justify-content:flex-end">
+          <button id="tts-stop" class="danger" disabled>Stop</button>
+        </div>
+      </div>
+
+      <label class="small">Output level</label>
+      <div class="meter"><div id="tts-meter" class="meter-bar"></div></div>
+      <canvas id="tts-wave" width="800" height="60"></canvas>
+
+      <div class="stats">
+        <div class="stat"><div class="k">TTFB</div><div class="v" id="tts-ttfb">—</div></div>
+        <div class="stat"><div class="k">Chunks</div><div class="v" id="tts-chunks">0</div></div>
+        <div class="stat"><div class="k">Audio</div><div class="v" id="tts-duration">0.00s</div></div>
+      </div>
+
+      <label class="small">Event log</label>
+      <div id="tts-log" class="log"></div>
+    </div>
+  </section>
+
+</main>
+
+<script>
+// ── Helpers ────────────────────────────────────────────────────────────────
+const $ = (sel) => document.querySelector(sel);
+const serverInput = $("#server-url");
+const keyInput = $("#api-key");
+
+function baseUrl() { return serverInput.value.replace(/\/$/, ""); }
+function wsUrl(path) {
+  const u = new URL(baseUrl());
+  u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
+  u.pathname = path;
+  const k = keyInput.value.trim();
+  if (k) u.searchParams.set("token", k);
+  return u.toString();
+}
+function authHeaders() {
+  const k = keyInput.value.trim();
+  return k ? { "Authorization": "Bearer " + k } : {};
+}
+function ts(startMs) { return ((performance.now() - startMs) / 1000).toFixed(2) + "s"; }
+function logTo(listEl, cls, msg, tsLabel) {
+  const row = document.createElement("div");
+  row.className = "ev " + cls;
+  row.innerHTML = `<span class="ts">${tsLabel}</span><span class="msg"></span>`;
+  row.querySelector(".msg").textContent = msg;
+  listEl.appendChild(row);
+  listEl.scrollTop = listEl.scrollHeight;
+}
+
+// ── Health / GPU indicator ─────────────────────────────────────────────────
+const healthPill = $("#health-pill");
+const gpuPill = $("#gpu-pill");
+async function checkHealth() {
+  healthPill.className = "pill warn"; healthPill.textContent = "checking…";
+  try {
+    const r = await fetch(baseUrl() + "/health", { headers: authHeaders() });
+    const j = await r.json();
+    if (j.ready) {
+      healthPill.className = "pill ok";
+      healthPill.textContent = `ready · tts=${j.tts?.loaded ? "✓" : "—"} stt=${j.stt?.loaded ? "✓" : "—"}`;
+      gpuPill.textContent = `RSS ${Math.round(j.memory_rss_mb)} MB`;
+    } else {
+      healthPill.className = "pill warn";
+      healthPill.textContent = "starting";
+    }
+  } catch (e) {
+    healthPill.className = "pill err"; healthPill.textContent = "unreachable";
+  }
+}
+$("#health-btn").addEventListener("click", checkHealth);
+checkHealth();
+setInterval(checkHealth, 15000);
+
+// ── Shared: scrolling waveform drawer ──────────────────────────────────────
+function makeWaveform(canvas) {
+  const ctx = canvas.getContext("2d");
+  let buf = new Float32Array(canvas.width);
+  let pos = 0;
+  function push(samples) {
+    // Downsample to 1 peak per column
+    const step = Math.max(1, Math.floor(samples.length / 8));
+    for (let i = 0; i < samples.length; i += step) {
+      let peak = 0;
+      for (let j = i; j < Math.min(i + step, samples.length); j++) {
+        if (Math.abs(samples[j]) > peak) peak = Math.abs(samples[j]);
+      }
+      buf[pos] = peak;
+      pos = (pos + 1) % buf.length;
+    }
+  }
+  function draw() {
+    ctx.fillStyle = "#0a0d13"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = "#6ea8ff"; ctx.beginPath();
+    const mid = canvas.height / 2;
+    for (let i = 0; i < buf.length; i++) {
+      const ix = (pos + i) % buf.length;
+      const v = buf[ix] * mid;
+      ctx.moveTo(i, mid - v);
+      ctx.lineTo(i, mid + v);
+    }
+    ctx.stroke();
+    requestAnimationFrame(draw);
+  }
+  draw();
+  return { push };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TTS: stream PCM chunks, decode and play via Web Audio
+// ═══════════════════════════════════════════════════════════════════════════
+const ttsLog = $("#tts-log");
+const ttsMeter = $("#tts-meter");
+const ttsWave = makeWaveform($("#tts-wave"));
+const ttsPlayBtn = $("#tts-play");
+const ttsStopBtn = $("#tts-stop");
+const ttsSpeedV = $("#tts-speed-v");
+$("#tts-speed").addEventListener("input", e => ttsSpeedV.textContent = parseFloat(e.target.value).toFixed(2));
+
+let ttsAbort = null;
+let ttsCtx = null;
+let ttsNextTime = 0;
+let ttsLastEndedAt = 0; // ctx time when the last scheduled chunk finishes
+
+async function playTTS(override) {
+  ttsLog.innerHTML = "";
+  $("#tts-ttfb").textContent = "—";
+  $("#tts-chunks").textContent = "0";
+  $("#tts-duration").textContent = "0.00s";
+  const text = (typeof override === "string" ? override : $("#tts-text").value).trim();
+  if (!text) return;
+  if (typeof override === "string") $("#tts-text").value = override;
+  const voice = $("#tts-voice").value.trim() || "auto";
+  const speed = parseFloat($("#tts-speed").value);
+
+  ttsPlayBtn.disabled = true; ttsStopBtn.disabled = false;
+  ttsCtx = new (window.AudioContext || window.webkitAudioContext)();
+  ttsNextTime = ttsCtx.currentTime;
+  ttsAbort = new AbortController();
+  const t0 = performance.now();
+  let firstByteAt = null, bytesIn = 0, chunkCount = 0, audioSeconds = 0;
+
+  logTo(ttsLog, "info", `request → ${voice} · speed ${speed}`, ts(t0));
+
+  try {
+    const res = await fetch(baseUrl() + "/v1/audio/speech", {
+      method: "POST",
+      signal: ttsAbort.signal,
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({
+        model: "omnivoice", input: text, voice, speed,
+        response_format: "pcm", stream: true,
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      logTo(ttsLog, "err", `HTTP ${res.status}: ${body.slice(0, 200)}`, ts(t0));
+      throw new Error(`HTTP ${res.status}`);
+    }
+    const sampleRate = parseInt(res.headers.get("X-Audio-Sample-Rate") || "24000", 10);
+    logTo(ttsLog, "info", `200 · ${sampleRate} Hz int16 LE`, ts(t0));
+
+    const reader = res.body.getReader();
+    let leftover = new Uint8Array(0);
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (firstByteAt === null) {
+        firstByteAt = performance.now();
+        $("#tts-ttfb").textContent = Math.round(firstByteAt - t0) + " ms";
+      }
+      bytesIn += value.length;
+      chunkCount++;
+      // Combine with leftover, drop trailing odd byte
+      const combined = new Uint8Array(leftover.length + value.length);
+      combined.set(leftover); combined.set(value, leftover.length);
+      const evenLen = combined.length - (combined.length % 2);
+      const take = combined.subarray(0, evenLen);
+      leftover = combined.subarray(evenLen);
+
+      const int16 = new Int16Array(take.buffer, take.byteOffset, take.length / 2);
+      const float32 = new Float32Array(int16.length);
+      let peak = 0;
+      for (let i = 0; i < int16.length; i++) {
+        const v = int16[i] / 32768;
+        float32[i] = v;
+        const a = Math.abs(v); if (a > peak) peak = a;
+      }
+      // Schedule chunk
+      const buf = ttsCtx.createBuffer(1, float32.length, sampleRate);
+      buf.copyToChannel(float32, 0);
+      const src = ttsCtx.createBufferSource();
+      src.buffer = buf; src.connect(ttsCtx.destination);
+      const startAt = Math.max(ttsNextTime, ttsCtx.currentTime);
+      src.start(startAt);
+      ttsNextTime = startAt + buf.duration;
+      audioSeconds += buf.duration;
+
+      ttsMeter.style.width = (peak * 100).toFixed(0) + "%";
+      ttsWave.push(float32);
+      $("#tts-chunks").textContent = chunkCount;
+      $("#tts-duration").textContent = audioSeconds.toFixed(2) + "s";
+      ttsLastEndedAt = ttsNextTime;
+      logTo(ttsLog, "tts-chunk", `chunk #${chunkCount} · ${value.length}B · +${buf.duration.toFixed(2)}s`, ts(t0));
+    }
+    logTo(ttsLog, "info", `done · ${bytesIn} bytes · ${audioSeconds.toFixed(2)}s audio`, ts(t0));
+  } catch (e) {
+    if (e.name !== "AbortError") logTo(ttsLog, "err", String(e), ts(t0));
+    else logTo(ttsLog, "warn", "aborted", ts(t0));
+  } finally {
+    ttsPlayBtn.disabled = false; ttsStopBtn.disabled = true; ttsAbort = null;
+  }
+  // Wait until the last scheduled audio actually finishes playing through speakers.
+  if (ttsCtx) {
+    const remaining = Math.max(0, ttsLastEndedAt - ttsCtx.currentTime);
+    if (remaining > 0) await new Promise(r => setTimeout(r, remaining * 1000 + 80));
+  }
+}
+ttsPlayBtn.addEventListener("click", () => playTTS());
+function stopTTS(reason) {
+  if (ttsAbort) { try { ttsAbort.abort(); } catch (_) {} }
+  if (ttsCtx) { try { ttsCtx.close(); } catch (_) {} ttsCtx = null; }
+  if (reason) logTo(ttsLog, "warn", reason, ts(performance.now()));
+}
+function isTTSPlaying() {
+  return ttsAbort !== null || (ttsCtx && ttsCtx.currentTime < ttsLastEndedAt);
+}
+ttsStopBtn.addEventListener("click", () => stopTTS("stop clicked"));
+
+// ═══════════════════════════════════════════════════════════════════════════
+// STT: capture mic, downsample to 16 kHz, stream to WebSocket
+// ═══════════════════════════════════════════════════════════════════════════
+const sttLog = $("#stt-log");
+const sttMeter = $("#stt-meter");
+const sttWave = makeWaveform($("#stt-wave"));
+const sttStartBtn = $("#stt-start");
+const sttStopBtn = $("#stt-stop");
+const sttStatus = $("#stt-status");
+const transcript = $("#stt-transcript");
+let sttMediaStream = null, sttCtx = null, sttWs = null, sttProcessor = null;
+let sttBytesSent = 0, sttPartials = 0, sttFinals = 0;
+let sttT0 = 0;
+// SimulStreaming emits each committed word-chunk as a partial, and the tail
+// punctuation as the "final". Accumulate everything from the last final so the
+// pipeline receives the full utterance, not just "?" / ".".
+let sttUtterance = "";
+
+function setStatus(cls, txt) { sttStatus.className = "pill " + cls; sttStatus.textContent = txt; }
+
+async function startSTT() {
+  transcript.innerHTML = "";
+  sttLog.innerHTML = "";
+  sttBytesSent = 0; sttPartials = 0; sttFinals = 0;
+  sttUtterance = "";
+  $("#stt-sent").textContent = "0 KB";
+  $("#stt-partials").textContent = "0";
+  $("#stt-finals").textContent = "0";
+  sttT0 = performance.now();
+
+  try {
+    sttMediaStream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+  } catch (e) {
+    logTo(sttLog, "err", "mic permission denied: " + e, ts(sttT0));
+    return;
+  }
+
+  sttCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const inputRate = sttCtx.sampleRate;
+  const targetRate = 16000;
+  const ratio = inputRate / targetRate;
+  logTo(sttLog, "info", `mic open · input ${inputRate} Hz → resampling to ${targetRate} Hz`, ts(sttT0));
+
+  const url = wsUrl("/v1/audio/transcribe");
+  setStatus("warn", "connecting…");
+  sttWs = new WebSocket(url);
+  sttWs.binaryType = "arraybuffer";
+
+  sttWs.onopen = () => {
+    setStatus("ok", "streaming");
+    logTo(sttLog, "info", `WS open → ${url.replace(/token=[^&]+/, "token=***")}`, ts(sttT0));
+    startMicPump(inputRate, targetRate, ratio);
+  };
+  sttWs.onmessage = (ev) => {
+    let m;
+    try { m = JSON.parse(ev.data); } catch { logTo(sttLog, "warn", `non-JSON: ${ev.data}`, ts(sttT0)); return; }
+    if (m.error) { logTo(sttLog, "err", JSON.stringify(m.error), ts(sttT0)); return; }
+    if (!m.text) return;
+    sttUtterance += m.text;
+
+    if (m.is_final) {
+      sttFinals++;
+      $("#stt-finals").textContent = sttFinals;
+      const utterance = sttUtterance.trim();
+      sttUtterance = "";
+      logTo(sttLog, "final", `FINAL [${(m.start_ms/1000).toFixed(2)}–${(m.end_ms/1000).toFixed(2)}s] ${m.text}  ⇒ utterance: "${utterance}"`, ts(sttT0));
+      // Commit any current partial bubble, then append a solid final span with
+      // the full utterance (partials shown live above get replaced by the final).
+      const cur = transcript.querySelector(".cursor");
+      if (cur) cur.remove();
+      transcript.querySelectorAll(".p.utt-active").forEach(n => n.remove());
+      const span = document.createElement("span");
+      span.className = "f"; span.textContent = utterance + " ";
+      transcript.appendChild(span);
+      if (window.pipelineMode && utterance) {
+        setStage("llm");
+        llmSend(utterance);
+      }
+    } else {
+      sttPartials++;
+      $("#stt-partials").textContent = sttPartials;
+      logTo(sttLog, "partial", `partial [${(m.start_ms/1000).toFixed(2)}–${(m.end_ms/1000).toFixed(2)}s] ${m.text}`, ts(sttT0));
+      const cur = transcript.querySelector(".cursor");
+      if (cur) cur.remove();
+      const span = document.createElement("span");
+      span.className = "p utt-active cursor"; span.textContent = m.text;
+      transcript.appendChild(span);
+    }
+  };
+  sttWs.onerror = () => { logTo(sttLog, "err", "WS error", ts(sttT0)); };
+  sttWs.onclose = (ev) => {
+    setStatus("", `closed (${ev.code})`);
+    logTo(sttLog, "info", `WS closed · code=${ev.code} reason=${ev.reason || "—"}`, ts(sttT0));
+    sttStartBtn.disabled = false; sttStopBtn.disabled = true;
+    tearDownMic();
+  };
+
+  sttStartBtn.disabled = true; sttStopBtn.disabled = false;
+}
+
+function startMicPump(inputRate, targetRate, ratio) {
+  const src = sttCtx.createMediaStreamSource(sttMediaStream);
+  // ScriptProcessor: deprecated but universally supported & sufficient for 16 kHz speech.
+  const bufSize = 4096;
+  sttProcessor = sttCtx.createScriptProcessor(bufSize, 1, 1);
+  let carry = new Float32Array(0);
+
+  // Barge-in: track consecutive loud frames while TTS is playing.
+  let loudFrames = 0;
+  const BARGE_THRESHOLD = 0.08; // ~-22 dBFS — tune if too sensitive/insensitive
+  const BARGE_FRAMES = 3; // ~250 ms at 4096 samples on 48 kHz
+
+  sttProcessor.onaudioprocess = (e) => {
+    const input = e.inputBuffer.getChannelData(0);
+    sttWave.push(input);
+
+    // Compute quick RMS for barge-in detection (before resampling)
+    let sumSq = 0;
+    for (let i = 0; i < input.length; i++) sumSq += input[i] * input[i];
+    const rms = Math.sqrt(sumSq / input.length);
+    if (isTTSPlaying()) {
+      if (rms > BARGE_THRESHOLD) {
+        loudFrames++;
+        if (loudFrames >= BARGE_FRAMES) {
+          stopTTS(`barge-in (rms ${rms.toFixed(3)})`);
+          if (llmAbort) { try { llmAbort.abort(); } catch (_) {} }
+          setStage("stt");
+          loudFrames = 0;
+        }
+      } else {
+        loudFrames = 0;
+      }
+    } else {
+      loudFrames = 0;
+    }
+    // Simple decimation with averaging — poor man's anti-aliasing. Fine for speech.
+    const combined = new Float32Array(carry.length + input.length);
+    combined.set(carry); combined.set(input, carry.length);
+    const outN = Math.floor(combined.length / ratio);
+    const out = new Int16Array(outN);
+    let peak = 0;
+    for (let i = 0; i < outN; i++) {
+      const start = Math.floor(i * ratio);
+      const end = Math.floor((i + 1) * ratio);
+      let sum = 0, n = 0;
+      for (let j = start; j < end && j < combined.length; j++) { sum += combined[j]; n++; }
+      const v = n ? sum / n : 0;
+      if (Math.abs(v) > peak) peak = Math.abs(v);
+      out[i] = Math.max(-32768, Math.min(32767, Math.round(v * 32767)));
+    }
+    sttMeter.style.width = (peak * 100).toFixed(0) + "%";
+    const consumedInput = Math.floor(outN * ratio);
+    carry = combined.slice(consumedInput);
+
+    if (sttWs && sttWs.readyState === WebSocket.OPEN && out.byteLength > 0) {
+      sttWs.send(out.buffer);
+      sttBytesSent += out.byteLength;
+      $("#stt-sent").textContent = (sttBytesSent / 1024).toFixed(1) + " KB";
+    }
+  };
+
+  src.connect(sttProcessor);
+  sttProcessor.connect(sttCtx.destination); // ScriptProcessor needs a sink to run
+}
+
+function tearDownMic() {
+  try { sttProcessor && sttProcessor.disconnect(); } catch (_) {}
+  try { sttMediaStream && sttMediaStream.getTracks().forEach(t => t.stop()); } catch (_) {}
+  try { sttCtx && sttCtx.close(); } catch (_) {}
+  sttMediaStream = null; sttCtx = null; sttProcessor = null;
+}
+
+function stopSTT() {
+  if (sttWs && sttWs.readyState === WebSocket.OPEN) {
+    sttWs.send(JSON.stringify({ type: "eof" }));
+    logTo(sttLog, "info", "sent EOF", ts(sttT0));
+    setStatus("warn", "closing…");
+    // Server flushes a final and closes; onclose handles UI cleanup.
+  } else {
+    tearDownMic();
+    sttStartBtn.disabled = false; sttStopBtn.disabled = true;
+  }
+}
+
+sttStartBtn.addEventListener("click", startSTT);
+sttStopBtn.addEventListener("click", stopSTT);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LLM: stream from local Ollama /api/chat, keep conversation context
+// ═══════════════════════════════════════════════════════════════════════════
+const llmChat = $("#llm-chat");
+const llmLog = $("#llm-log");
+const llmInput = $("#llm-input");
+const llmSendBtn = $("#llm-send");
+const llmStopBtn = $("#llm-stop");
+const llmClearBtn = $("#llm-clear");
+const llmUrl = $("#llm-url");
+const llmModel = $("#llm-model");
+const llmSystem = $("#llm-system");
+
+let llmMessages = []; // conversation history: {role: "user"|"assistant", content: "..."}
+let llmAbort = null;
+
+function renderTurn(role, content, { streaming = false } = {}) {
+  const el = document.createElement("div");
+  el.className = "turn " + role + (streaming ? " streaming" : "");
+  const roleEl = document.createElement("span");
+  roleEl.className = "role"; roleEl.textContent = role.toUpperCase();
+  el.appendChild(roleEl);
+  const txt = document.createElement("span");
+  txt.className = "text"; txt.textContent = content;
+  el.appendChild(txt);
+  llmChat.appendChild(el);
+  llmChat.scrollTop = llmChat.scrollHeight;
+  return { el, txtEl: txt };
+}
+
+function llmClear() {
+  llmMessages = [];
+  llmChat.innerHTML = "";
+  llmLog.innerHTML = "";
+  $("#llm-ttft").textContent = "—";
+  $("#llm-tokens").textContent = "0";
+  $("#llm-tps").textContent = "—";
+  const note = document.createElement("div");
+  note.className = "system-note"; note.textContent = "conversation cleared";
+  llmChat.appendChild(note);
+}
+
+async function llmSend(override) {
+  const text = (typeof override === "string" ? override : llmInput.value).trim();
+  if (!text) return;
+  if (typeof override !== "string") llmInput.value = "";
+  llmMessages.push({ role: "user", content: text });
+  renderTurn("user", text);
+
+  const t0 = performance.now();
+  let firstTokenAt = null, tokenCount = 0, assistantText = "";
+
+  const system = llmSystem.value.trim();
+  const messages = system
+    ? [{ role: "system", content: system }, ...llmMessages]
+    : [...llmMessages];
+
+  const { el: assistantEl, txtEl: assistantTxt } =
+    renderTurn("assistant", "", { streaming: true });
+
+  llmSendBtn.disabled = true; llmStopBtn.disabled = false;
+  llmAbort = new AbortController();
+
+  logTo(llmLog, "info", `request → ${llmModel.value} (${messages.length} msgs)`, ts(t0));
+
+  try {
+    const res = await fetch(llmUrl.value.replace(/\/$/, "") + "/api/chat", {
+      method: "POST",
+      signal: llmAbort.signal,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: llmModel.value.trim(),
+        messages,
+        stream: true,
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`HTTP ${res.status}: ${body.slice(0, 300)}`);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let carry = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      carry += decoder.decode(value, { stream: true });
+      // NDJSON: one JSON object per line
+      const lines = carry.split("\n");
+      carry = lines.pop(); // keep last partial line
+      for (const line of lines) {
+        const s = line.trim();
+        if (!s) continue;
+        let obj;
+        try { obj = JSON.parse(s); } catch { logTo(llmLog, "warn", "non-JSON line: " + s.slice(0,120), ts(t0)); continue; }
+
+        if (obj.message && obj.message.content) {
+          if (firstTokenAt === null) {
+            firstTokenAt = performance.now();
+            $("#llm-ttft").textContent = Math.round(firstTokenAt - t0) + " ms";
+            logTo(llmLog, "info", "first token", ts(t0));
+          }
+          assistantText += obj.message.content;
+          assistantTxt.textContent = assistantText;
+          llmChat.scrollTop = llmChat.scrollHeight;
+        }
+
+        if (obj.done) {
+          const total_s = (performance.now() - t0) / 1000;
+          tokenCount = obj.eval_count || tokenCount;
+          $("#llm-tokens").textContent = tokenCount || "—";
+          const tps = obj.eval_count && obj.eval_duration
+            ? (obj.eval_count / (obj.eval_duration / 1e9)).toFixed(1)
+            : (tokenCount > 0 ? (tokenCount / total_s).toFixed(1) : "—");
+          $("#llm-tps").textContent = tps;
+          logTo(llmLog, "info",
+            `done · ${tokenCount} tok · ${total_s.toFixed(2)}s · ${tps} tok/s`,
+            ts(t0));
+        }
+      }
+    }
+    llmMessages.push({ role: "assistant", content: assistantText });
+    if (window.pipelineMode && assistantText.trim()) {
+      setStage("tts");
+      playTTS(assistantText).finally(() => setStage("stt"));
+    }
+  } catch (e) {
+    if (e.name === "AbortError") {
+      logTo(llmLog, "warn", "aborted", ts(t0));
+      if (assistantText) llmMessages.push({ role: "assistant", content: assistantText + " [aborted]" });
+    } else {
+      logTo(llmLog, "err", String(e.message || e), ts(t0));
+      assistantTxt.textContent = assistantText
+        ? assistantText + "\n\n[error: " + e.message + "]"
+        : "[error: " + e.message + "]";
+      // If CORS is likely the cause (common with Ollama on localhost), hint at it.
+      if (/fetch|NetworkError|Failed to fetch/i.test(String(e))) {
+        logTo(llmLog, "warn",
+          "If Ollama blocks this origin, restart it with: OLLAMA_ORIGINS=* ollama serve",
+          ts(t0));
+      }
+    }
+  } finally {
+    assistantEl.classList.remove("streaming");
+    llmSendBtn.disabled = false; llmStopBtn.disabled = true; llmAbort = null;
+    llmInput.focus();
+  }
+}
+
+llmSendBtn.addEventListener("click", llmSend);
+llmStopBtn.addEventListener("click", () => { if (llmAbort) llmAbort.abort(); });
+llmClearBtn.addEventListener("click", llmClear);
+llmInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    if (!llmSendBtn.disabled) llmSend();
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Pipeline mode: STT final → LLM → TTS, with mic barge-in to interrupt TTS/LLM
+// ═══════════════════════════════════════════════════════════════════════════
+const pipelineToggle = $("#pipeline-toggle");
+const STAGE_EL = {
+  stt: $("#stt-stage"),
+  llm: $("#llm-stage"),
+  tts: $("#tts-stage"),
+};
+window.pipelineMode = false;
+
+function setStage(name) {
+  for (const [k, el] of Object.entries(STAGE_EL)) {
+    el.classList.toggle("active", k === name);
+  }
+}
+
+pipelineToggle.addEventListener("change", () => {
+  window.pipelineMode = pipelineToggle.checked;
+  document.body.classList.toggle("pipeline-on", window.pipelineMode);
+  if (window.pipelineMode) {
+    setStage("stt");
+    // Encourage the user to start the mic themselves (browsers require a gesture).
+    if (!sttMediaStream) {
+      logTo(sttLog, "info", "pipeline ON — click 🎤 Start to begin the loop", ts(performance.now()));
+    }
+  } else {
+    setStage(null);
+  }
+});
+
+</script>
+</body>
+</html>

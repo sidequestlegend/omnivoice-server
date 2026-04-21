@@ -13,31 +13,41 @@ router = APIRouter()
 
 @router.get("/health")
 async def health(request: Request):
-    """Readiness check. Returns 503 while model is loading, 200 when ready."""
+    """Readiness check. 503 while either TTS or STT model is still loading, 200 when ready."""
     cfg = request.app.state.cfg
     model_svc = request.app.state.model_svc
+    stt_model_svc = getattr(request.app.state, "stt_model_svc", None)
     ram_mb = round(psutil.Process().memory_info().rss / 1024 / 1024, 1)
 
-    if not model_svc.is_loaded:
-        return JSONResponse(
-            status_code=503,
-            content={
-                "status": "starting",
-                "ready": False,
-                "model_loaded": False,
-                "memory_rss_mb": ram_mb,
-            },
-        )
+    tts_loaded = bool(model_svc.is_loaded)
+    stt_required = bool(getattr(cfg, "stt_enabled", False))
+    stt_loaded = bool(stt_model_svc.is_loaded) if stt_model_svc is not None else False
 
-    uptime_s = round(time.monotonic() - request.app.state.start_time, 1)
-    return {
-        "status": "healthy",
-        "ready": True,
-        "model_loaded": True,
-        "uptime_s": uptime_s,
+    ready = tts_loaded and (stt_loaded or not stt_required)
+
+    body: dict = {
+        "status": "healthy" if ready else "starting",
+        "ready": ready,
+        # Legacy top-level keys preserved for existing clients/tests.
+        "model_loaded": tts_loaded,
         "model_id": cfg.model_id,
+        "tts": {
+            "loaded": tts_loaded,
+            "model_id": cfg.model_id,
+        },
+        "stt": {
+            "enabled": stt_required,
+            "loaded": stt_loaded,
+            "model_path": getattr(cfg, "stt_model_path", None) if stt_required else None,
+        },
         "memory_rss_mb": ram_mb,
     }
+
+    if not ready:
+        return JSONResponse(status_code=503, content=body)
+
+    body["uptime_s"] = round(time.monotonic() - request.app.state.start_time, 1)
+    return body
 
 
 @router.get("/metrics")

@@ -1,4 +1,5 @@
-# CUDA-enabled build for omnivoice-server
+# CUDA-enabled build for omnivoice-server — TTS (OmniVoice) + STT (SimulStreaming Whisper).
+# One image, unchanged, runs in Docker Desktop locally and on Salad.
 FROM nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
 
 WORKDIR /home/ubuntu/app
@@ -8,14 +9,14 @@ RUN echo "Acquire::Retry \"3\";" > /etc/apt/apt.conf.d/99retry && \
     apt-get update --allow-insecure-repositories || apt-get update || true && \
     apt-get install -y --allow-unauthenticated \
     build-essential libsndfile1 libgomp1 \
-    python3 python3-venv \
+    python3 python3-venv python3-dev \
     curl git ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 RUN (getent group 1000 || groupadd -g 1000 ubuntu) && \
     (getent passwd 1000 || useradd -m -s /bin/bash -u 1000 -g 1000 ubuntu) && \
-    usermod -aG video ubuntu && mkdir -p /home/ubuntu/app/profiles && \
-    chown -R ubuntu:ubuntu /home/ubuntu
+    usermod -aG video ubuntu && mkdir -p /home/ubuntu/app/profiles /opt/simulstreaming-repo && \
+    chown -R ubuntu:ubuntu /home/ubuntu /opt/simulstreaming-repo
 
 # Switch to ubuntu user
 USER ubuntu
@@ -40,19 +41,74 @@ ENV VIRTUAL_ENV=/home/ubuntu/venv
 RUN python3 -m venv --system-site-packages $VIRTUAL_ENV
 ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
 
-#OMNIVOICE ENVs
+# ── OMNIVOICE ENVs ───────────────────────────────────────────────────────────
 ENV OMNIVOICE_LOG_LEVEL=info
+# Pin all ML-library caches to predictable in-image paths so baked weights are
+# actually reused at runtime (critical for ephemeral filesystems like Salad).
+ENV HF_HOME=/home/ubuntu/.cache/huggingface
+ENV XDG_CACHE_HOME=/home/ubuntu/.cache
+ENV TORCH_HOME=/home/ubuntu/.cache/torch
+# SimulStreaming isn't pip-installable (no pyproject.toml upstream). We clone it
+# into the image and put its root on PYTHONPATH so our code can
+# `from simulstreaming.whisper.simul_whisper.simul_whisper import PaddedAlignAttWhisper`.
+ENV PYTHONPATH="/opt/simulstreaming-repo:${PYTHONPATH}"
 
-RUN --mount=type=cache,target=/home/ubuntu/.cache/pip pip install \
-    torchcodec==0.11 torch==2.8.0+cu128 torchaudio==2.8.0+cu128 \
-    --index-url https://download.pytorch.org/whl/cu128 && \
-    pip install git+https://github.com/maemreyo/omnivoice-server.git
+# ── Python deps ──────────────────────────────────────────────────────────────
+# Install torch first so pip resolves everything else against the CUDA wheels.
+ARG TORCH_CHANNEL=stable
+RUN --mount=type=cache,target=/home/ubuntu/.cache/pip,uid=1000,gid=1000 \
+    if [ "$TORCH_CHANNEL" = "nightly" ]; then \
+        pip install --pre torch torchaudio torchcodec \
+            --index-url https://download.pytorch.org/whl/nightly/cu128; \
+    else \
+        pip install torchcodec==0.11 torch==2.8.0+cu128 torchaudio==2.8.0+cu128 \
+            --index-url https://download.pytorch.org/whl/cu128; \
+    fi
+
+# Clone SimulStreaming at a pinned commit. Pinned SHA matches README docs and
+# is the verified version against which our importers are written.
+ARG SIMULSTREAMING_SHA=fc8cfed522edc291dd1e645ef2ba7c9ecb6513a5
+RUN --mount=type=cache,target=/home/ubuntu/.cache/pip,uid=1000,gid=1000 \
+    git clone https://github.com/ufal/SimulStreaming.git /opt/simulstreaming-repo && \
+    cd /opt/simulstreaming-repo && \
+    git checkout "$SIMULSTREAMING_SHA" && \
+    pip install -r requirements_whisper.txt
+
+# Copy project sources and install the local omnivoice-server package.
+# Whisper transitive deps (librosa, tiktoken, etc.) are listed in pyproject.toml.
+COPY --chown=ubuntu:ubuntu pyproject.toml README.md /home/ubuntu/app/
+COPY --chown=ubuntu:ubuntu omnivoice_server /home/ubuntu/app/omnivoice_server
+RUN --mount=type=cache,target=/home/ubuntu/.cache/pip,uid=1000,gid=1000 \
+    pip install /home/ubuntu/app
+
+# ── Bake model weights into the image (opt-in) ───────────────────────────────
+# Local dev: leave BAKE_MODELS=false (default). docker-compose-cuda.yml volume-
+# mounts the HF and torch caches, so weights persist across `docker compose up`
+# cycles and download only once on first start. Keeps the image ~5 GB smaller
+# (~21 GB vs ~26 GB baked).
+#
+# Salad / production: build with `--build-arg BAKE_MODELS=true`. Salad has no
+# persistent volumes, so bakes are required to avoid re-downloading ~5 GB on
+# every cold start. Cold start drops from ~5 min to ~30 s.
+ARG BAKE_MODELS=false
+RUN if [ "$BAKE_MODELS" = "true" ]; then \
+        python -c "from omnivoice import OmniVoice; OmniVoice.from_pretrained('k2-fsa/OmniVoice', device_map='cpu')" \
+            || (echo "OmniVoice warm-download failed — will download at runtime" && exit 0); \
+        python -c "from simulstreaming.whisper.simul_whisper.config import AlignAttConfig; \
+                   from simulstreaming.whisper.simul_whisper.simul_whisper import PaddedAlignAttWhisper; \
+                   PaddedAlignAttWhisper(AlignAttConfig(model_path='large-v3', segment_length=0.5))" \
+            || (echo "Whisper warm-download failed — will download at runtime" && exit 0); \
+        python -c "import torch; torch.hub.load('snakers4/silero-vad', 'silero_vad', trust_repo=True)" \
+            || (echo "Silero warm-download failed — will download at runtime" && exit 0); \
+    else \
+        echo "Skipping model bake (BAKE_MODELS=false). Weights download on first container start."; \
+    fi
 
 # Expose server port
 EXPOSE 8880
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+# Health check. start_period accommodates cold GPU init of both models.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=180s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8880/health')" || exit 1
 
 # Run server

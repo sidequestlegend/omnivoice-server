@@ -34,6 +34,15 @@ dependencies = [
     "psutil>=6.0.0",
     "huggingface-hub>=0.26.0",
     "soundfile>=0.12.0",
+    # STT (Whisper via SimulStreaming). The SimulStreaming source itself is NOT pip-installable
+    # (no pyproject.toml / setup.py in that repo) and must be cloned into the runtime image
+    # and added to PYTHONPATH — see Dockerfile.cuda. These are the transitive Python deps it
+    # needs at runtime.
+    "librosa>=0.10.0",
+    "tiktoken>=0.7.0",
+    "tqdm>=4.66.0",
+    "scipy>=1.11.0",
+    "numpy>=1.24.0",
 ]
 
 [project.optional-dependencies]

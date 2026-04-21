@@ -85,6 +85,74 @@ def main() -> None:
         help="Token sampling temperature, 0-2 (env: OMNIVOICE_CLASS_TEMPERATURE)",
     )
 
+    # STT (Whisper via SimulStreaming)
+    parser.add_argument(
+        "--stt-enabled",
+        action="store_true",
+        default=None,
+        dest="stt_enabled",
+        help="Load Whisper STT model at startup (env: OMNIVOICE_STT_ENABLED)",
+    )
+    parser.add_argument(
+        "--no-stt",
+        action="store_false",
+        dest="stt_enabled",
+        help="Disable STT loading",
+    )
+    parser.add_argument(
+        "--stt-model-path",
+        default=None,
+        dest="stt_model_path",
+        help="Whisper model name or .pt path (env: OMNIVOICE_STT_MODEL_PATH)",
+    )
+    parser.add_argument(
+        "--stt-language",
+        default=None,
+        dest="stt_language",
+        help="ISO 639-1 code, or 'auto' (env: OMNIVOICE_STT_LANGUAGE)",
+    )
+    parser.add_argument(
+        "--stt-task",
+        default=None,
+        choices=["transcribe", "translate"],
+        dest="stt_task",
+        help="Transcribe or translate (env: OMNIVOICE_STT_TASK)",
+    )
+    parser.add_argument(
+        "--stt-beams",
+        type=int,
+        default=None,
+        dest="stt_beams",
+        help="Beam width, 1=greedy (env: OMNIVOICE_STT_BEAMS)",
+    )
+    parser.add_argument(
+        "--stt-min-chunk-size",
+        type=float,
+        default=None,
+        dest="stt_min_chunk_size",
+        help="Min buffered audio (s) before emitting (env: OMNIVOICE_STT_MIN_CHUNK_SIZE)",
+    )
+    parser.add_argument(
+        "--stt-vad",
+        action="store_true",
+        default=None,
+        dest="stt_vad",
+        help="Enable Silero VAD (env: OMNIVOICE_STT_VAD)",
+    )
+    parser.add_argument(
+        "--no-stt-vad",
+        action="store_false",
+        dest="stt_vad",
+        help="Disable Silero VAD",
+    )
+    parser.add_argument(
+        "--stt-max-concurrent",
+        type=int,
+        default=None,
+        dest="stt_max_concurrent",
+        help="Max concurrent STT sessions (env: OMNIVOICE_STT_MAX_CONCURRENT)",
+    )
+
     # Inference
     parser.add_argument(
         "--max-concurrent",

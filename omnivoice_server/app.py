@@ -16,12 +16,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .config import Settings
-from .routers import health, models, script, speech, voices
+from .routers import health, models, script, speech, transcribe, voices
 from .services.inference import InferenceService
 from .services.metrics import MetricsService
 from .services.model import ModelService
 from .services.profiles import ProfileService
 from .services.script import ScriptOrchestrator
+from .services.stt import STTService
+from .services.stt_model import STTModelService
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +55,28 @@ async def lifespan(app: FastAPI):
         cfg=cfg,
     )
 
+    stt_executor: ThreadPoolExecutor | None = None
+    if cfg.stt_enabled:
+        stt_model_svc = STTModelService(cfg)
+        await stt_model_svc.load()
+        app.state.stt_model_svc = stt_model_svc
+
+        # Whisper has shared internal state — ServiceSession serialises inference via
+        # an asyncio.Lock. The executor size is >= 1 so process_iter doesn't block
+        # uvicorn's event loop while CPython pins a thread on CUDA ops.
+        stt_executor = ThreadPoolExecutor(
+            max_workers=max(1, cfg.stt_max_concurrent),
+            thread_name_prefix="omnivoice-stt",
+        )
+        app.state.stt_svc = STTService(
+            model_svc=stt_model_svc,
+            executor=stt_executor,
+            cfg=cfg,
+        )
+    else:
+        app.state.stt_model_svc = None
+        app.state.stt_svc = None
+
     app.state.profile_svc = ProfileService(profile_dir=cfg.profile_dir)
     app.state.metrics_svc = MetricsService()
     app.state.script_orchestrator = ScriptOrchestrator(
@@ -74,6 +98,8 @@ async def lifespan(app: FastAPI):
     # ── Shutdown ──────────────────────────────────────────────────────────────
     logger.info("Shutting down...")
     executor.shutdown(wait=False)
+    if stt_executor is not None:
+        stt_executor.shutdown(wait=False)
     logger.info("Done.")
 
 
@@ -193,6 +219,7 @@ def create_app(cfg: Settings) -> FastAPI:
     app.include_router(voices.router, prefix="/v1")
     app.include_router(models.router, prefix="/v1")
     app.include_router(script.router, prefix="/v1")
+    app.include_router(transcribe.router, prefix="/v1")
     app.include_router(health.router)
 
     return app

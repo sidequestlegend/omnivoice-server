@@ -64,12 +64,15 @@ def _mock_synthesize(req, **_kwargs):
 @pytest.fixture
 def settings(tmp_path_factory):  # FIX: tmp_path_factory is a fixture param, not pytest attr
     profile_dir = tmp_path_factory.mktemp("profiles")
+    # STT is opt-in for tests — most cases don't touch it. Tests that exercise
+    # the WebSocket endpoint use the stt_settings/stt_client fixtures below.
     return Settings(
         device="cpu",
         num_step=4,
         max_concurrent=1,
         api_key="",
         profile_dir=profile_dir,
+        stt_enabled=False,
     )
 
 
@@ -85,6 +88,101 @@ def client(settings):
             with TestClient(app) as c:
                 c.app.state.inference_svc.synthesize = AsyncMock(side_effect=_mock_synthesize)
                 yield c
+
+
+@pytest.fixture
+def stt_settings(tmp_path_factory):
+    profile_dir = tmp_path_factory.mktemp("profiles")
+    return Settings(
+        device="cpu",
+        num_step=4,
+        max_concurrent=1,
+        api_key="",
+        profile_dir=profile_dir,
+        stt_enabled=True,
+        stt_model_path="large-v3",
+        stt_vad=False,  # VAD requires torch.hub.load — skip in unit tests
+        stt_max_concurrent=1,
+        stt_emit_interval_ms=50,
+    )
+
+
+@pytest.fixture
+def stt_client(stt_settings):
+    """A TestClient with both TTS and STT services fully mocked."""
+    from omnivoice_server.services.stt import STTSession
+
+    app = create_app(stt_settings)
+
+    # Fake STT session: records inserted audio, returns a canned partial on each
+    # process_iter() and a canned final on finish().
+    class _FakeSession:
+        def __init__(self):
+            self.chunks: list[bytes] = []
+            self.closed = False
+            self.iters = 0
+
+        def insert_audio_chunk(self, pcm_bytes: bytes) -> None:
+            self.chunks.append(pcm_bytes)
+
+        async def process_iter(self):
+            self.iters += 1
+            from omnivoice_server.services.stt import TranscriptUpdate
+            return TranscriptUpdate(
+                start_ms=0,
+                end_ms=500,
+                text=f"partial #{self.iters}",
+                is_final=False,
+                emission_time_ms=self.iters * 100,
+            )
+
+        async def finish(self):
+            from omnivoice_server.services.stt import TranscriptUpdate
+            return TranscriptUpdate(
+                start_ms=0,
+                end_ms=1000,
+                text="final",
+                is_final=True,
+                emission_time_ms=999,
+            )
+
+        def close(self) -> None:
+            self.closed = True
+
+    async def _fake_acquire_session(self):  # bound method on STTService
+        session = _FakeSession()
+        app.state.last_stt_session = session
+        return session
+
+    def _fake_release_session(self, session):
+        session.close()
+
+    with patch("omnivoice_server.services.model.ModelService.load", new_callable=AsyncMock):
+        with patch(
+            "omnivoice_server.services.model.ModelService.is_loaded",
+            new_callable=lambda: property(lambda self: True),
+        ):
+            with patch("omnivoice_server.services.stt_model.STTModelService.load",
+                       new_callable=AsyncMock):
+                with patch(
+                    "omnivoice_server.services.stt_model.STTModelService.is_loaded",
+                    new_callable=lambda: property(lambda self: True),
+                ):
+                    with patch(
+                        "omnivoice_server.services.stt.STTService.acquire_session",
+                        _fake_acquire_session,
+                    ), patch(
+                        "omnivoice_server.services.stt.STTService.release_session",
+                        _fake_release_session,
+                    ):
+                        with TestClient(app) as c:
+                            c.app.state.inference_svc.synthesize = AsyncMock(
+                                side_effect=_mock_synthesize
+                            )
+                            yield c
+
+    # Silence unused-import warnings
+    _ = STTSession
 
 
 @pytest.fixture
