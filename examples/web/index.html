@@ -354,16 +354,14 @@
         </div>
       </div>
 
-      <label class="small">System prompt (optional)</label>
-      <textarea id="llm-system" rows="6" style="min-height:120px">You are a concise, natural-sounding voice assistant. Keep replies short and conversational.
-
-Use only basic punctuation — periods, commas, and hyphens. Avoid semicolons, colons, parentheses, em dashes, ellipses, and exclamation marks unless strictly necessary.
-
-You may occasionally insert short non-verbal expressions to sound more human. They MUST be wrapped in square brackets, placed inline in the sentence where the sound belongs, and used sparingly (at most one per reply). Supported tags:
-
-[laughter], [sigh], [confirmation-en], [question-en], [question-ah], [question-oh], [question-ei], [question-yi], [surprise-ah], [surprise-oh], [surprise-wa], [surprise-yo], [dissatisfaction-hnn]
-
-Do not invent new tags. Do not describe actions in brackets. Do not use emoji.</textarea>
+      <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px">
+        <label class="small" style="margin:0">System prompt (optional)</label>
+        <div style="flex:1"></div>
+        <select id="llm-system-preset" class="secondary" style="padding:4px 6px; font-size:11px; max-width:180px" title="Saved system prompts (stored in this browser's localStorage)"></select>
+        <button id="llm-system-save" class="secondary" type="button" style="padding:4px 8px; font-size:11px" title="Save the current textarea content as a named prompt">💾 Save as…</button>
+        <button id="llm-system-delete" class="secondary" type="button" style="padding:4px 8px; font-size:11px" disabled title="Delete the selected saved prompt (built-in default cannot be deleted)">🗑</button>
+      </div>
+      <textarea id="llm-system" rows="6" style="min-height:120px"></textarea>
 
       <label class="small">Conversation</label>
       <div id="llm-chat" class="chat"></div>
@@ -1743,6 +1741,119 @@ const llmClearBtn = $("#llm-clear");
 const llmUrl = $("#llm-url");
 const llmModel = $("#llm-model");
 const llmSystem = $("#llm-system");
+
+// ── Saved system prompts (localStorage) ───────────────────────────────────
+// Storage schema (localStorage key "omnivoice.systemPrompts"):
+//   { [name: string]: { prompt: string } }
+// Built-in prompts are merged in at runtime and cannot be overwritten or
+// deleted — user-defined prompts with the same name shadow them.
+const SYSTEM_PROMPT_STORAGE_KEY = "omnivoice.systemPrompts";
+const SYSTEM_PROMPT_LAST_KEY = "omnivoice.systemPrompts.last";
+const BUILTIN_SYSTEM_PROMPTS = {
+  "Voice assistant (default)":
+`You are a concise, natural-sounding voice assistant. Keep replies short and conversational.
+
+Use only basic punctuation — periods, commas, and hyphens. Avoid semicolons, colons, parentheses, em dashes, ellipses, and exclamation marks unless strictly necessary.
+
+You may occasionally insert short non-verbal expressions to sound more human. They MUST be wrapped in square brackets, placed inline in the sentence where the sound belongs, and used sparingly (at most one per reply). Supported tags:
+
+[laughter], [sigh], [confirmation-en], [question-en], [question-ah], [question-oh], [question-ei], [question-yi], [surprise-ah], [surprise-oh], [surprise-wa], [surprise-yo], [dissatisfaction-hnn]
+
+Do not invent new tags. Do not describe actions in brackets. Do not use emoji.`,
+  "Plain assistant":
+`You are a helpful assistant. Answer clearly and concisely.`,
+};
+
+const llmSystemPreset = $("#llm-system-preset");
+const llmSystemSaveBtn = $("#llm-system-save");
+const llmSystemDeleteBtn = $("#llm-system-delete");
+
+function loadUserPrompts() {
+  try {
+    const raw = localStorage.getItem(SYSTEM_PROMPT_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return (parsed && typeof parsed === "object") ? parsed : {};
+  } catch (_) { return {}; }
+}
+function saveUserPrompts(map) {
+  localStorage.setItem(SYSTEM_PROMPT_STORAGE_KEY, JSON.stringify(map));
+}
+function isBuiltin(name) { return Object.prototype.hasOwnProperty.call(BUILTIN_SYSTEM_PROMPTS, name); }
+
+function rebuildPromptDropdown(selectName) {
+  const user = loadUserPrompts();
+  llmSystemPreset.innerHTML = "";
+  const addOpt = (name, group) => {
+    const opt = document.createElement("option");
+    opt.value = name;
+    opt.textContent = name;
+    opt.dataset.group = group;
+    llmSystemPreset.appendChild(opt);
+  };
+  for (const name of Object.keys(BUILTIN_SYSTEM_PROMPTS)) addOpt(name, "builtin");
+  const userNames = Object.keys(user).filter(n => !isBuiltin(n)).sort();
+  for (const name of userNames) addOpt(name, "user");
+  if (selectName && llmSystemPreset.querySelector(`option[value="${CSS.escape(selectName)}"]`)) {
+    llmSystemPreset.value = selectName;
+  }
+  updateDeleteBtnState();
+}
+function updateDeleteBtnState() {
+  const name = llmSystemPreset.value;
+  llmSystemDeleteBtn.disabled = !name || isBuiltin(name);
+  llmSystemDeleteBtn.title = isBuiltin(name)
+    ? "Built-in prompts cannot be deleted"
+    : "Delete the selected saved prompt";
+}
+function applyPrompt(name) {
+  const user = loadUserPrompts();
+  const text = (user[name] && user[name].prompt) || BUILTIN_SYSTEM_PROMPTS[name] || "";
+  llmSystem.value = text;
+  localStorage.setItem(SYSTEM_PROMPT_LAST_KEY, name);
+}
+
+llmSystemPreset.addEventListener("change", () => {
+  applyPrompt(llmSystemPreset.value);
+  updateDeleteBtnState();
+});
+llmSystemSaveBtn.addEventListener("click", () => {
+  const current = llmSystemPreset.value;
+  const suggested = isBuiltin(current) ? "" : current;
+  const name = (prompt("Save this system prompt as:", suggested) || "").trim();
+  if (!name) return;
+  if (isBuiltin(name)) {
+    alert(`"${name}" is a built-in prompt and cannot be overwritten. Pick a different name.`);
+    return;
+  }
+  const user = loadUserPrompts();
+  if (user[name] && !confirm(`"${name}" already exists. Overwrite?`)) return;
+  user[name] = { prompt: llmSystem.value };
+  saveUserPrompts(user);
+  rebuildPromptDropdown(name);
+  localStorage.setItem(SYSTEM_PROMPT_LAST_KEY, name);
+});
+llmSystemDeleteBtn.addEventListener("click", () => {
+  const name = llmSystemPreset.value;
+  if (!name || isBuiltin(name)) return;
+  if (!confirm(`Delete saved prompt "${name}"?`)) return;
+  const user = loadUserPrompts();
+  delete user[name];
+  saveUserPrompts(user);
+  const firstBuiltin = Object.keys(BUILTIN_SYSTEM_PROMPTS)[0];
+  rebuildPromptDropdown(firstBuiltin);
+  applyPrompt(firstBuiltin);
+});
+
+// Boot: populate dropdown and restore last-used selection (or first built-in).
+(function initSystemPrompts() {
+  const last = localStorage.getItem(SYSTEM_PROMPT_LAST_KEY);
+  const firstBuiltin = Object.keys(BUILTIN_SYSTEM_PROMPTS)[0];
+  const user = loadUserPrompts();
+  const initial = (last && (isBuiltin(last) || user[last])) ? last : firstBuiltin;
+  rebuildPromptDropdown(initial);
+  applyPrompt(initial);
+})();
 
 let llmMessages = []; // conversation history: {role: "user"|"assistant", content: "..."}
 let llmAbort = null;
