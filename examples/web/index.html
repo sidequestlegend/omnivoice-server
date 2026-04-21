@@ -482,7 +482,7 @@ Do not invent new tags. Do not describe actions in brackets. Do not use emoji.</
         <div class="clone-field">
           <div style="display:flex; align-items:center; gap:8px">
             <label class="small" style="flex:1">Reference text <span class="hint-inline">(optional)</span></label>
-            <button id="tts-clone-transcribe" class="secondary" type="button" disabled title="Run the recording through Whisper to auto-fill this field" style="padding:4px 10px; font-size:11px">🪄 Transcribe recording</button>
+            <button id="tts-clone-transcribe" class="secondary" type="button" disabled title="Run the reference audio (recording or uploaded file) through Whisper to auto-fill this field" style="padding:4px 10px; font-size:11px">🪄 Transcribe audio</button>
           </div>
           <input id="tts-clone-text" type="text" placeholder="transcript of the reference audio — improves clone quality">
         </div>
@@ -1271,9 +1271,9 @@ function stopRec() {
 const transcribeBtn = $("#tts-clone-transcribe");
 
 function updateTranscribeBtn() {
-  // Only enabled when we have an in-browser recording (a recorded Blob) — not
-  // when the user picked a file, since we'd have to re-encode it anyway.
-  transcribeBtn.disabled = !recordedBlob;
+  // Enabled when we have either an in-browser recording OR an uploaded file —
+  // decodeAudioData handles WAV/MP3/FLAC/OGG uniformly, so both sources work.
+  transcribeBtn.disabled = !(recordedBlob || (cloneFile.files && cloneFile.files[0]));
 }
 updateTranscribeBtn();
 
@@ -1304,19 +1304,22 @@ async function decodeBlobToPcm16Mono16k(blob) {
 }
 
 async function transcribeRecording() {
-  if (!recordedBlob) return;
+  // Prefer the latest recording, fall back to the uploaded file.
+  const source = recordedBlob || (cloneFile.files && cloneFile.files[0]) || null;
+  if (!source) return;
+  const sourceLabel = recordedBlob ? "recording" : "uploaded file";
   transcribeBtn.disabled = true;
   const oldLabel = transcribeBtn.textContent;
   transcribeBtn.textContent = "transcribing…";
-  setRecStatus("info", "decoding recording → 16 kHz mono PCM");
+  setRecStatus("info", `decoding ${sourceLabel} → 16 kHz mono PCM`);
 
   let pcm16;
   try {
-    pcm16 = await decodeBlobToPcm16Mono16k(recordedBlob);
+    pcm16 = await decodeBlobToPcm16Mono16k(source);
   } catch (e) {
     setRecStatus("err", "decode failed: " + e.message);
     transcribeBtn.textContent = oldLabel;
-    transcribeBtn.disabled = false;
+    updateTranscribeBtn();
     return;
   }
 
@@ -1361,7 +1364,7 @@ async function transcribeRecording() {
     setRecStatus("err", "no transcript received — is the STT endpoint enabled?");
   }
   transcribeBtn.textContent = oldLabel;
-  transcribeBtn.disabled = !recordedBlob;
+  updateTranscribeBtn();
 }
 
 transcribeBtn.addEventListener("click", transcribeRecording);
