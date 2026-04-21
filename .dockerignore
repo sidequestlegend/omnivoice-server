@@ -1,0 +1,50 @@
+# Keep docker build context small. The Dockerfile does scoped COPYs already,
+# but this stops `docker compose build` from hashing giant dirs that are
+# guaranteed unused.
+
+.git
+.github
+.vscode
+.idea
+.venv
+venv
+.client-venv
+*.egg-info
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.mypy_cache
+.ruff_cache
+htmlcov
+coverage.xml
+.coverage
+.coverage.*
+node_modules
+dist
+build
+*.egg
+
+# Local caches and secrets that must not leak into the image
+.hf-cache
+.torch-cache
+profiles
+.env
+.env.*
+*.env
+
+# Local artifacts
+benchmarks/results
+samples
+voice_samples
+docs
+*.md
+!README.md
+
+# Test & dev files
+tests
+examples
+scripts
+Makefile
+docker-compose.yml
+Dockerfile
