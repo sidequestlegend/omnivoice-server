@@ -1330,17 +1330,6 @@ async function transcribeRecording() {
   let gotAny = false;
 
   await new Promise((resolve) => {
-    ws.onopen = () => {
-      setRecStatus("info", `streaming ${(pcm16.byteLength / 1024).toFixed(0)} KB to Whisper…`);
-      // Send in 100 ms-ish chunks so server-side VAD sees steady input.
-      const chunkSamples = 1600;
-      for (let i = 0; i < pcm16.length; i += chunkSamples) {
-        const slice = pcm16.subarray(i, Math.min(i + chunkSamples, pcm16.length));
-        // Copy because subarray shares the buffer — WS.send is async.
-        ws.send(new Int16Array(slice).buffer);
-      }
-      ws.send(JSON.stringify({ type: "eof" }));
-    };
     ws.onmessage = (ev) => {
       if (typeof ev.data !== "string") return;
       try {
@@ -1351,6 +1340,26 @@ async function transcribeRecording() {
     };
     ws.onclose = () => resolve();
     ws.onerror = () => resolve(); // still resolve; utterance may be partial
+
+    ws.onopen = async () => {
+      setRecStatus("info", `streaming ${(pcm16.byteLength / 1024).toFixed(0)} KB to Whisper…`);
+      // Pace chunks at real-time (100 ms per 1600 samples @ 16 kHz). Blasting
+      // all the PCM in one synchronous loop outruns the server's 250 ms
+      // emitter poll — EOF hits before partials can be emitted, and we only
+      // get back the tail from session.finish().
+      const chunkSamples = 1600;
+      const chunkMs = (chunkSamples / 16000) * 1000;
+      for (let i = 0; i < pcm16.length; i += chunkSamples) {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        const slice = pcm16.subarray(i, Math.min(i + chunkSamples, pcm16.length));
+        // Copy because subarray shares the buffer — WS.send is async.
+        ws.send(new Int16Array(slice).buffer);
+        await new Promise(r => setTimeout(r, chunkMs));
+      }
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "eof" }));
+      }
+    };
   });
 
   const text = utterance.trim();
