@@ -1511,6 +1511,30 @@ let sttUtterance = "";
 
 function setStatus(cls, txt) { sttStatus.className = "pill " + cls; sttStatus.textContent = txt; }
 
+// Render a finalized utterance into the transcript and (in pipeline mode)
+// fire it to the LLM. Shared between "real" server is_final frames and the
+// client-side watchdog fallback — Silero VAD sometimes can't produce an
+// is_final mid-utterance, so we locally treat the accumulated partials as
+// finalized when we detect prolonged silence on the mic.
+function finalizeUtterance(utterance, { source = "server" } = {}) {
+  utterance = (utterance || "").trim();
+  if (!utterance) return;
+  sttFinals++;
+  $("#stt-finals").textContent = sttFinals;
+  sttUtterance = "";
+  logTo(sttLog, "final", `FINAL (${source}) ⇒ utterance: "${utterance}"`, ts(sttT0));
+  const cur = transcript.querySelector(".cursor");
+  if (cur) cur.remove();
+  transcript.querySelectorAll(".p.utt-active").forEach(n => n.remove());
+  const span = document.createElement("span");
+  span.className = "f"; span.textContent = utterance + " ";
+  transcript.appendChild(span);
+  if (window.pipelineMode) {
+    setStage("llm");
+    llmSend(utterance);
+  }
+}
+
 async function startSTT() {
   transcript.innerHTML = "";
   sttLog.innerHTML = "";
@@ -1561,33 +1585,17 @@ async function startSTT() {
     sttUtterance += m.text;
 
     if (m.is_final) {
-      sttFinals++;
-      $("#stt-finals").textContent = sttFinals;
-      const utterance = sttUtterance.trim();
-      sttUtterance = "";
-      logTo(sttLog, "final", `FINAL [${(m.start_ms/1000).toFixed(2)}–${(m.end_ms/1000).toFixed(2)}s] ${m.text}  ⇒ utterance: "${utterance}"`, ts(sttT0));
-      // Commit any current partial bubble, then append a solid final span with
-      // the full utterance (partials shown live above get replaced by the final).
-      const cur = transcript.querySelector(".cursor");
-      if (cur) cur.remove();
-      transcript.querySelectorAll(".p.utt-active").forEach(n => n.remove());
-      const span = document.createElement("span");
-      span.className = "f"; span.textContent = utterance + " ";
-      transcript.appendChild(span);
-      if (window.pipelineMode && utterance) {
-        setStage("llm");
-        llmSend(utterance);
-      }
-    } else {
-      sttPartials++;
-      $("#stt-partials").textContent = sttPartials;
-      logTo(sttLog, "partial", `partial [${(m.start_ms/1000).toFixed(2)}–${(m.end_ms/1000).toFixed(2)}s] ${m.text}`, ts(sttT0));
-      const cur = transcript.querySelector(".cursor");
-      if (cur) cur.remove();
-      const span = document.createElement("span");
-      span.className = "p utt-active cursor"; span.textContent = m.text;
-      transcript.appendChild(span);
+      finalizeUtterance(sttUtterance, { source: `server [${(m.start_ms/1000).toFixed(2)}–${(m.end_ms/1000).toFixed(2)}s]` });
+      return;
     }
+    sttPartials++;
+    $("#stt-partials").textContent = sttPartials;
+    logTo(sttLog, "partial", `partial [${(m.start_ms/1000).toFixed(2)}–${(m.end_ms/1000).toFixed(2)}s] ${m.text}`, ts(sttT0));
+    const cur = transcript.querySelector(".cursor");
+    if (cur) cur.remove();
+    const span = document.createElement("span");
+    span.className = "p utt-active cursor"; span.textContent = m.text;
+    transcript.appendChild(span);
   };
   sttWs.onerror = () => { logTo(sttLog, "err", "WS error", ts(sttT0)); };
   sttWs.onclose = (ev) => {
@@ -1671,10 +1679,18 @@ function startMicPump(inputRate, targetRate, ratio) {
       } else if (peakIn < FLUSH_QUIET_THRESHOLD) {
         quietFrames++;
         if (audibleSinceLastFlush && sttUtterance.length > 0 &&
-            quietFrames >= FLUSH_AFTER_QUIET_FRAMES &&
-            sttWs && sttWs.readyState === WebSocket.OPEN) {
-          sttWs.send(JSON.stringify({ type: "flush" }));
-          logTo(sttLog, "warn", `silence watchdog → flush (quiet ${quietFrames} frames, utterance="${sttUtterance.trim().slice(0,40)}")`, ts(sttT0));
+            quietFrames >= FLUSH_AFTER_QUIET_FRAMES) {
+          // Silero VAD often can't produce a FINAL mid-utterance (stuck in
+          // its 0.35–0.50 hysteresis band, or buffer not in a decodable
+          // state). Rather than wait indefinitely, treat what we've already
+          // accumulated from partials as the utterance and fire the pipeline
+          // locally. Also send "flush" to the server as a best-effort cleanup.
+          const utt = sttUtterance.trim();
+          logTo(sttLog, "warn", `silence watchdog → local finalize (quiet ${quietFrames} frames, utterance="${utt.slice(0,60)}")`, ts(sttT0));
+          if (sttWs && sttWs.readyState === WebSocket.OPEN) {
+            sttWs.send(JSON.stringify({ type: "flush" }));
+          }
+          finalizeUtterance(utt, { source: "watchdog" });
           audibleSinceLastFlush = false;
           quietFrames = 0;
         }
