@@ -9,11 +9,12 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from .config import Settings
 from .routers import health, models, script, speech, transcribe, voices
@@ -26,6 +27,16 @@ from .services.stt import STTService
 from .services.stt_model import STTModelService
 
 logger = logging.getLogger(__name__)
+
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
+_INDEX_HTML = _STATIC_DIR / "index.html"
+
+# Paths the HTTP auth middleware lets through without an Authorization header.
+# The frontend itself must be reachable pre-login, and /auth/status is how the
+# frontend learns whether a login is required at all.
+_AUTH_EXEMPT_PATHS: frozenset[str] = frozenset(
+    {"/", "/health", "/metrics", "/v1/models", "/auth/status"}
+)
 
 
 @asynccontextmanager
@@ -164,8 +175,7 @@ def create_app(cfg: Settings) -> FastAPI:
         async def auth_middleware(request: Request, call_next):
             if request.method == "OPTIONS":
                 return await call_next(request)
-            # Skip auth for health, metrics, and model listing
-            if request.url.path in ("/health", "/metrics", "/v1/models"):
+            if request.url.path in _AUTH_EXEMPT_PATHS:
                 return await call_next(request)
             auth = request.headers.get("Authorization", "")
             if auth != f"Bearer {cfg.api_key}":
@@ -221,5 +231,12 @@ def create_app(cfg: Settings) -> FastAPI:
     app.include_router(script.router, prefix="/v1")
     app.include_router(transcribe.router, prefix="/v1")
     app.include_router(health.router)
+
+    # ── Static frontend ───────────────────────────────────────────────────────
+    # Serve the single-page web studio at the root so the server and UI share an
+    # origin (no CORS hop, one API key gates both).
+    @app.get("/", include_in_schema=False)
+    async def index() -> FileResponse:
+        return FileResponse(_INDEX_HTML, media_type="text/html")
 
     return app

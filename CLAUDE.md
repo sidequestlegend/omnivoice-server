@@ -110,13 +110,9 @@ docker compose -f docker-compose-cuda.yml up -d --force-recreate
 
 ## Static frontend
 
-The web studio at [examples/web/index.html](examples/web/index.html) is a single-file HTML app that talks to the server at `http://localhost:8880`. It needs to be served over HTTP (not `file://`) for `getUserMedia` and WebSockets to work reliably.
+The web studio at [omnivoice_server/static/index.html](omnivoice_server/static/index.html) is a single-file HTML app served directly by the FastAPI server at `/`. Open **http://localhost:8880/** in Chrome or Edge — no separate static server is needed.
 
-```powershell
-python -m http.server 5173 --bind 127.0.0.1 --directory examples/web
-```
-
-Then open **http://127.0.0.1:5173/** in Chrome or Edge. The server's CORS is set to `*` via `.env`, so the cross-origin call from `:5173` → `:8880` is allowed.
+If `OMNIVOICE_API_KEY` is set in `.env`, the studio shows a login overlay on first load. The entered password **is** the API key: on success it's saved to `localStorage["omnivoice_api_key"]` and reused as `Authorization: Bearer <key>` on HTTP calls and `?token=<key>` on WebSocket connections. A "Sign out" button in the header clears localStorage and returns to the login screen. When `OMNIVOICE_API_KEY` is empty, the login step is skipped entirely — the frontend probes [`GET /auth/status`](omnivoice_server/routers/health.py) on page load to decide.
 
 ---
 
@@ -144,8 +140,10 @@ Then open **http://127.0.0.1:5173/** in Chrome or Edge. The server's CORS is set
 - `DELETE /v1/voices/profiles/{id}` — remove a profile
 - `PATCH /v1/voices/profiles/{id}` — update ref audio and/or text
 - **`WS /v1/audio/transcribe`** — live STT via SimulStreaming Whisper (binary PCM 16 kHz mono in, JSON transcript frames out). Client control: `{"type":"eof"}` (finish and close), `{"type":"flush"}` (finish current utterance, keep session open — used when VAD gets stuck).
-- `GET /health` — readiness (returns 503 while either model still loading)
-- `GET /metrics` — request counters + RAM
+- `GET /` — serves the single-file web studio
+- `GET /health` — readiness (returns 503 while either model still loading). Unauthenticated.
+- `GET /metrics` — request counters + RAM. Unauthenticated.
+- `GET /auth/status` — `{"required": bool}`. Unauthenticated so the frontend can probe before prompting for a password.
 
 ---
 
@@ -171,7 +169,8 @@ Running totals live in the "Image size" entry of `docker images omnivoice-server
 | [omnivoice_server/routers/speech.py](omnivoice_server/routers/speech.py) | HTTP + WS TTS endpoints, voice resolution (auto/design/preset/clone) |
 | [omnivoice_server/routers/voices.py](omnivoice_server/routers/voices.py) | voice profile CRUD (cloning) |
 | [omnivoice_server/routers/transcribe.py](omnivoice_server/routers/transcribe.py) | WS STT endpoint |
-| [omnivoice_server/routers/health.py](omnivoice_server/routers/health.py) | `/health`, `/metrics` |
+| [omnivoice_server/routers/health.py](omnivoice_server/routers/health.py) | `/health`, `/metrics`, `/auth/status` (unauthenticated probe for the frontend) |
+| [omnivoice_server/static/index.html](omnivoice_server/static/index.html) | Three-panel web studio: STT · LLM (Ollama) · TTS, with pipeline mode. Served at `/`. |
 | [omnivoice_server/services/model.py](omnivoice_server/services/model.py) | OmniVoice singleton + dtype-candidate fallback loader |
 | [omnivoice_server/services/stt_model.py](omnivoice_server/services/stt_model.py) | Whisper (SimulStreaming) singleton + Silero VAD |
 | [omnivoice_server/services/inference.py](omnivoice_server/services/inference.py) | Async wrapper around `model.generate()` with thread-pool + semaphore |
@@ -184,7 +183,6 @@ Running totals live in the "Image size" entry of `docker images omnivoice-server
 | [docker-compose-cuda.yml](docker-compose-cuda.yml) | Local Docker Desktop orchestration with volume-mounted caches |
 | [examples/streaming_player.py](examples/streaming_player.py) | CLI TTS client (WebSocket, prints per-sentence timestamps) |
 | [examples/streaming_transcribe.py](examples/streaming_transcribe.py) | CLI STT client (mic or WAV file) |
-| [examples/web/index.html](examples/web/index.html) | Three-panel web studio: STT · LLM (Ollama) · TTS, with pipeline mode |
 | [tests/](tests/) | pytest suite, mocks both models via `AsyncMock` + property patches |
 
 ---
@@ -220,7 +218,7 @@ All `OMNIVOICE_*` vars map to `Settings` fields in [config.py](omnivoice_server/
 | `OMNIVOICE_STT_VAD` | `true` | Silero VAD (VACOnlineASRProcessor) |
 | `OMNIVOICE_STT_MAX_CONCURRENT` | `1` | Hard-forced to serialised anyway — Whisper model has shared state |
 | `OMNIVOICE_MAX_CONCURRENT` | `2` | TTS concurrency |
-| `OMNIVOICE_API_KEY` | _(empty)_ | Bearer token for HTTP auth. Empty → no auth. WS endpoints accept it via `?token=` query. |
+| `OMNIVOICE_API_KEY` | _(empty)_ | Bearer token for HTTP auth **and** login password for the web studio. Empty → no auth, studio skips login. WS endpoints accept it via `?token=` query. |
 | `OMNIVOICE_CORS_ALLOW_ORIGINS` | `http://localhost:3000,...` | Comma-separated, `*` for wildcard (gated off by credentials validator) |
 | `HF_TOKEN` | _(empty)_ | HuggingFace access token. Not an `OMNIVOICE_*` var — it's read by the `huggingface_hub` library directly. |
 | `HF_HUB_OFFLINE` | _(unset)_ | Set to `1` in prod (e.g. Salad) to fail fast if anything tries to hit HF at runtime |
@@ -241,7 +239,7 @@ One-time setup:
 ollama pull qwen3.5         # or qwen3.5:9b for the quantised variant
 ```
 
-If the studio can't connect to Ollama, the log shows a `model list fetch failed` warning and a `OLLAMA_ORIGINS=*` hint. By default Ollama allows `localhost:*` and `127.0.0.1:*` origins — the studio at `http://127.0.0.1:5173` should Just Work without any Ollama-side config.
+If the studio can't connect to Ollama, the log shows a `model list fetch failed` warning and a `OLLAMA_ORIGINS=*` hint. By default Ollama allows `localhost:*` and `127.0.0.1:*` origins — the studio at `http://localhost:8880` should Just Work without any Ollama-side config.
 
 Thinking models (Qwen 3, DeepSeek-R1) have their chain-of-thought suppressed via a `"think": false` field on the chat request; no additional stripping is done client-side.
 
@@ -249,7 +247,7 @@ Thinking models (Qwen 3, DeepSeek-R1) have their chain-of-thought suppressed via
 
 ## Web studio feature overview
 
-The three-column layout at [examples/web/index.html](examples/web/index.html):
+The three-column layout at [omnivoice_server/static/index.html](omnivoice_server/static/index.html):
 
 - **STT** (left) — live mic capture, 16 kHz mono PCM binary frames over WS, partials + finals rendered with timestamps. Includes a silence-watchdog that sends `{"type":"flush"}` if Silero VAD gets stuck in its 0.35–0.50 hysteresis dead zone.
 - **LLM** (middle) — Ollama `/api/chat` streaming, token-by-token rendering, TTFT/tokens/tok-per-sec stats, editable system prompt pre-seeded with OmniVoice's inline non-verbal tags (`[laughter]`, `[sigh]`, etc.) and a minimal-punctuation directive. Model dropdown populated from Ollama's `/api/tags`.
@@ -267,8 +265,6 @@ The three-column layout at [examples/web/index.html](examples/web/index.html):
 - WebSocket works through Salad's Container Gateway unchanged (TLS terminates at the gateway; plain `ws://` inside the container).
 - Voice profiles at `/home/ubuntu/app/profiles` are **ephemeral on Salad** (no persistent volumes). Document or replace `ProfileService` with an S3-backed implementation if persistence matters.
 
-Full deployment recipe lives in the plan file at `C:\Users\shane\.claude\plans\i-want-to-come-glittery-tiger.md` sections 15 onward.
-
 ---
 
 ## Debugging gotchas
@@ -277,7 +273,7 @@ Full deployment recipe lives in the plan file at `C:\Users\shane\.claude\plans\i
 - **Whisper redownloads on container recreate.** openai-whisper (via SimulStreaming) caches `.pt` files in the current working directory by default, not `~/.cache/whisper`. The `.whisper-cache` volume plus `OMNIVOICE_STT_MODEL_PATH=/home/ubuntu/.cache/whisper/large-v3.pt` in `.env` pin it to the mounted path.
 - **Pydantic fails with `hf_token: Extra inputs are not permitted`.** The `.env` file is being loaded; add `extra="ignore"` to `SettingsConfigDict` in [config.py](omnivoice_server/config.py).
 - **Triton "Python.h: No such file or directory" warning spam.** Missing `python3-dev` in the apt step; Triton falls back to a slow PyTorch kernel implementation. Fixed in the current Dockerfile.
-- **Barge-in doesn't trigger.** Peak threshold or frame count too high. Defaults in [examples/web/index.html](examples/web/index.html): `BARGE_PEAK_THRESHOLD = 0.08`, `BARGE_FRAMES = 2`. The `mic active · peak <N>` log line shows what you're hitting; drop the threshold below that.
+- **Barge-in doesn't trigger.** Peak threshold or frame count too high. Defaults in [omnivoice_server/static/index.html](omnivoice_server/static/index.html): `BARGE_PEAK_THRESHOLD = 0.08`, `BARGE_FRAMES = 2`. The `mic active · peak <N>` log line shows what you're hitting; drop the threshold below that.
 - **CORS wildcard fails with `JSONDecodeError`.** `pydantic-settings` tries to JSON-parse `list[str]` env values. `cors_allow_origins` in [config.py](omnivoice_server/config.py) uses `Annotated[list[str], NoDecode]` so the custom validator handles `*`/comma-separated/JSON-array strings.
 - **5090 CUDA errors.** If stable torch 2.8+cu128 ever throws sm_120 issues, rebuild with `--build-arg TORCH_CHANNEL=nightly`. Tag the output image as `…-torch-nightly` so it doesn't get promoted to production by accident.
 

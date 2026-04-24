@@ -272,14 +272,54 @@
 
   .input-bar { display: flex; gap: 8px; }
   .input-bar textarea { flex: 1; min-height: 56px; max-height: 160px; }
+
+  /* ── Login overlay ────────────────────────────────────────────────────── */
+  .login-overlay {
+    position: fixed; inset: 0; z-index: 9999;
+    background: rgba(10, 13, 19, 0.92); backdrop-filter: blur(3px);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .login-overlay[hidden] { display: none !important; }
+  .login-card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 22px 24px; min-width: 320px; max-width: 380px;
+    display: flex; flex-direction: column; gap: 12px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.4);
+  }
+  .login-card h2 { margin: 0; font-size: 16px; color: var(--accent); letter-spacing: .5px; }
+  .login-card p { margin: 0; color: var(--muted); font-size: 12px; }
+  .login-card input[type="password"] {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    padding: 9px 10px; border-radius: 6px; font-size: 13px; font-family: var(--mono);
+    width: 100%;
+  }
+  .login-card input[type="password"]:focus { outline: none; border-color: var(--accent); }
+  .login-card button { width: 100%; padding: 9px 14px; }
+  .login-card .err-msg {
+    color: var(--err); font-size: 12px; background: #251010;
+    border: 1px solid #5a2e2e; border-radius: 6px; padding: 6px 10px;
+    font-family: var(--mono);
+  }
+  .login-card .err-msg[hidden] { display: none; }
+  #signout-btn { font-size: 11px; padding: 5px 10px; }
+  #signout-btn[hidden] { display: none; }
 </style>
 </head>
 <body>
 
+<div id="login-overlay" class="login-overlay" hidden>
+  <form id="login-form" class="login-card" autocomplete="on">
+    <h2>OmniVoice Studio</h2>
+    <p>Enter the server password to continue.</p>
+    <input id="login-key" type="password" autocomplete="current-password" required autofocus>
+    <div id="login-error" class="err-msg" hidden></div>
+    <button type="submit">Sign in</button>
+  </form>
+</div>
+
 <header>
   <h1>OmniVoice Studio</h1>
-  <label>Server <input id="server-url" type="text" value="http://localhost:8880"></label>
-  <label>API key <input id="api-key" type="password" placeholder="optional"></label>
+  <button id="signout-btn" class="secondary" hidden title="Forget API key and sign out">Sign out</button>
   <button id="health-btn" class="secondary">Health</button>
   <span id="health-pill" class="pill">idle</span>
   <div class="spacer"></div>
@@ -524,21 +564,23 @@
 <script>
 // ── Helpers ────────────────────────────────────────────────────────────────
 const $ = (sel) => document.querySelector(sel);
-const serverInput = $("#server-url");
-const keyInput = $("#api-key");
 
-function baseUrl() { return serverInput.value.replace(/\/$/, ""); }
+// The page is served by the API server itself, so we always talk to our own
+// origin. The API key is entered at login (see the auth gate at the bottom)
+// and lives here as module state + localStorage.
+const LS_KEY = "omnivoice_api_key";
+let apiKey = localStorage.getItem(LS_KEY) || "";
+
+function baseUrl() { return window.location.origin; }
 function wsUrl(path) {
   const u = new URL(baseUrl());
   u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
   u.pathname = path;
-  const k = keyInput.value.trim();
-  if (k) u.searchParams.set("token", k);
+  if (apiKey) u.searchParams.set("token", apiKey);
   return u.toString();
 }
 function authHeaders() {
-  const k = keyInput.value.trim();
-  return k ? { "Authorization": "Bearer " + k } : {};
+  return apiKey ? { "Authorization": "Bearer " + apiKey } : {};
 }
 function ts(startMs) { return ((performance.now() - startMs) / 1000).toFixed(2) + "s"; }
 function logTo(listEl, cls, msg, tsLabel) {
@@ -571,7 +613,7 @@ async function checkHealth() {
   }
 }
 $("#health-btn").addEventListener("click", checkHealth);
-checkHealth();
+// Initial checkHealth() fires from bootstrap() after the auth gate resolves.
 setInterval(checkHealth, 15000);
 
 // ── Shared: scrolling waveform drawer ──────────────────────────────────────
@@ -629,8 +671,7 @@ function ttsStreamUrl() {
   const u = new URL(baseUrl());
   u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
   u.pathname = "/v1/audio/speech/stream";
-  const k = keyInput.value.trim();
-  if (k) u.searchParams.set("token", k);
+  if (apiKey) u.searchParams.set("token", apiKey);
   return u.toString();
 }
 
@@ -1487,9 +1528,7 @@ voiceDeleteBtn.addEventListener("click", async () => {
   }
 });
 
-// Initial population
-loadVoices();
-serverInput.addEventListener("change", () => loadVoices());
+// Initial loadVoices() fires from bootstrap() after the auth gate resolves.
 
 // ═══════════════════════════════════════════════════════════════════════════
 // STT: capture mic, downsample to 16 kHz, stream to WebSocket
@@ -2125,6 +2164,137 @@ pipelineToggle.addEventListener("change", () => {
     setStage(null);
   }
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Auth gate: password-protect the studio using the server's OMNIVOICE_API_KEY.
+// Flow:
+//   1. Probe GET /auth/status. If required=false, skip login entirely.
+//   2. Else try the key from localStorage by calling /v1/voices. If it works,
+//      bootstrap the app. If 401, drop the key and show the login form.
+//   3. Login form validates the entered password via the same /v1/voices probe.
+//   4. On success we store the password in localStorage so reloads stay signed in.
+// The password is the API key. The server uses the same value as Bearer for HTTP
+// and ?token= on WebSockets — the authHeaders()/wsUrl() helpers above read it
+// out of the module-scoped `apiKey` variable we maintain here.
+// ═══════════════════════════════════════════════════════════════════════════
+const loginOverlay = $("#login-overlay");
+const loginForm = $("#login-form");
+const loginKey = $("#login-key");
+const loginError = $("#login-error");
+const signoutBtn = $("#signout-btn");
+let authRequired = false;
+let bootstrapped = false;
+
+function showLogin(errorMsg) {
+  loginOverlay.hidden = false;
+  loginKey.value = "";
+  if (errorMsg) {
+    loginError.textContent = errorMsg;
+    loginError.hidden = false;
+  } else {
+    loginError.hidden = true;
+  }
+  // Allow autofocus to work on re-show
+  setTimeout(() => loginKey.focus(), 0);
+}
+
+function hideLogin() {
+  loginOverlay.hidden = true;
+  loginError.hidden = true;
+}
+
+// Probe voices with a candidate key. Returns true for 200, false for 401.
+// Throws on network errors.
+async function validateKey(candidate) {
+  const headers = candidate ? { "Authorization": "Bearer " + candidate } : {};
+  const r = await fetch(baseUrl() + "/v1/voices", { headers });
+  if (r.status === 401 || r.status === 403) return false;
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return true;
+}
+
+// Fires the initial data loads that require auth. Idempotent-safe: if we call
+// this twice (e.g. after sign-out then sign-in) the voice/health calls simply
+// refetch, which is fine.
+function bootstrap() {
+  if (bootstrapped) {
+    checkHealth();
+    loadVoices();
+    return;
+  }
+  bootstrapped = true;
+  signoutBtn.hidden = !authRequired;
+  checkHealth();
+  loadVoices();
+}
+
+loginForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const candidate = loginKey.value.trim();
+  if (!candidate) {
+    showLogin("Password is required.");
+    return;
+  }
+  loginError.hidden = true;
+  try {
+    const ok = await validateKey(candidate);
+    if (!ok) {
+      showLogin("Incorrect password.");
+      return;
+    }
+  } catch (err) {
+    showLogin("Server unreachable: " + err.message);
+    return;
+  }
+  apiKey = candidate;
+  localStorage.setItem(LS_KEY, candidate);
+  hideLogin();
+  bootstrap();
+});
+
+signoutBtn.addEventListener("click", () => {
+  apiKey = "";
+  localStorage.removeItem(LS_KEY);
+  bootstrapped = false;
+  showLogin();
+});
+
+// Run the auth gate on page load.
+(async () => {
+  try {
+    const r = await fetch(baseUrl() + "/auth/status");
+    if (r.ok) {
+      const j = await r.json();
+      authRequired = !!j.required;
+    }
+  } catch {
+    // If /auth/status is unreachable the server is down; treat as auth-required
+    // so the user gets the login screen instead of a silently broken studio.
+    authRequired = true;
+  }
+
+  if (!authRequired) {
+    hideLogin();
+    bootstrap();
+    return;
+  }
+
+  if (apiKey) {
+    try {
+      if (await validateKey(apiKey)) {
+        hideLogin();
+        bootstrap();
+        return;
+      }
+      // Stored key was rejected — nuke it and fall through to the login screen.
+      apiKey = "";
+      localStorage.removeItem(LS_KEY);
+    } catch {
+      // Network error validating — show login so the user can retry.
+    }
+  }
+  showLogin();
+})();
 
 </script>
 </body>

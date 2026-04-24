@@ -1,6 +1,10 @@
 # CUDA-enabled build for omnivoice-server — TTS (OmniVoice) + STT (SimulStreaming Whisper).
 # One image, unchanged, runs in Docker Desktop locally and on Salad.
-FROM nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
+#
+# Base: `-base` (not `-cudnn-runtime`). PyTorch wheels bundle their own
+# nvidia_cublas, nvidia_cudnn, nvidia_cufft, nvidia_nccl, etc., so the
+# cudnn-runtime image's ~7 GB of system CUDA+cuDNN libs are pure duplication.
+FROM nvidia/cuda:12.8.0-base-ubuntu22.04
 
 WORKDIR /home/ubuntu/app
 # Install Python and build dependencies
@@ -81,6 +85,14 @@ COPY --chown=ubuntu:ubuntu omnivoice_server /home/ubuntu/app/omnivoice_server
 RUN --mount=type=cache,target=/home/ubuntu/.cache/pip,uid=1000,gid=1000 \
     pip install /home/ubuntu/app
 
+# Purge build-only packages now that all pip installs are finished. Saves ~500 MB.
+# Keep python3, python3-venv, libsndfile1, libgomp1, ffmpeg — all needed at runtime.
+USER root
+RUN apt-get purge -y --auto-remove \
+        build-essential python3-dev curl git \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+USER ubuntu
+
 # ── Bake model weights into the image (opt-in) ───────────────────────────────
 # Local dev: leave BAKE_MODELS=false (default). docker-compose-cuda.yml volume-
 # mounts the HF and torch caches, so weights persist across `docker compose up`
@@ -112,4 +124,8 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=180s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8880/health')" || exit 1
 
 # Run server
-CMD ["omnivoice-server", "--host", "0.0.0.0", "--port", "8880", "--profile-dir", "/home/ubuntu/app/profiles", "--device", "cuda"]
+# Bind on IPv6 (::). Linux accepts IPv4-mapped connections on a v6 socket by
+# default (IPV6_V6ONLY=0), so this keeps local Docker Desktop port-mapping
+# working AND makes the container reachable from Salad's IPv6-only Container
+# Gateway. Pinned 0.0.0.0 would hide the server from Salad entirely.
+CMD ["omnivoice-server", "--host", "::", "--port", "8880", "--profile-dir", "/home/ubuntu/app/profiles", "--device", "cuda"]

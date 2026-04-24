@@ -50,6 +50,15 @@ async def health(request: Request):
     return body
 
 
+@router.get("/auth/status")
+async def auth_status(request: Request):
+    """Whether the server has an API key configured. Unauthenticated by design
+    so the web client can decide whether to show a login screen before it has a
+    key to send."""
+    cfg = request.app.state.cfg
+    return {"required": bool(cfg.api_key)}
+
+
 @router.get("/metrics")
 async def metrics(request: Request):
     """Request metrics and current memory usage."""

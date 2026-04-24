@@ -72,6 +72,10 @@ omnivoice-server = "omnivoice_server.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["omnivoice_server"]
+# Explicitly ship the web studio so it's available after `pip install`.
+# Hatchling already picks up non-Python files inside included packages, but
+# being explicit makes the intent obvious and survives future filter tweaks.
+artifacts = ["omnivoice_server/static/*.html"]
 
 [tool.ruff]
 line-length = 100
